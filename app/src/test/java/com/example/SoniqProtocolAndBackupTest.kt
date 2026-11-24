@@ -42,13 +42,30 @@ class SoniqProtocolAndBackupTest {
     }
 
     @Test
-    fun `protocol registry identifies OnePlus and Google Fast Pair hardware accurately`() {
-        val onePlusAdapter = DeviceProtocolRegistry.resolveAdapter(
-            deviceName = "OnePlus Buds Pro 2",
+    fun `protocol registry identifies OnePlus Buds Pro 3 and Google Fast Pair hardware accurately`() {
+        val onePlusPro3Adapter = DeviceProtocolRegistry.resolveAdapter(
+            deviceName = "OnePlus Buds Pro 3",
             manufacturerIds = setOf(0x058E)
         )
-        assertTrue(onePlusAdapter is OnePlusOppoProtocolAdapter)
-        assertEquals(EarbudBrand.ONEPLUS, DeviceProtocolRegistry.inferBrandByUuidStrings("OnePlus Buds Pro 2"))
+        assertTrue(onePlusPro3Adapter is OnePlusOppoProtocolAdapter)
+        assertEquals(EarbudBrand.ONEPLUS, DeviceProtocolRegistry.inferBrandByUuidStrings("OnePlus Buds Pro 3"))
+
+        val onePlusCaps = onePlusPro3Adapter.resolveCapabilities(
+            hasGattBatteryService = true,
+            hasDeviceInfoService = true,
+            hasSingleBatteryLevel = true,
+            hasCodecInfo = true,
+            systemEqAvailable = true,
+            systemBassAvailable = true,
+            systemVirtualizerAvailable = true
+        )
+        assertTrue(onePlusCaps.supportsSingleBattery)
+        assertTrue(onePlusCaps.supportsFirmwareRead)
+        assertTrue(onePlusCaps.supportsCodecInfo)
+        assertTrue(onePlusCaps.supportsSystemEqualizer)
+        assertTrue(onePlusCaps.supportsSystemBassBoost)
+        assertTrue(onePlusCaps.supportsSystemVirtualizer)
+        assertFalse(onePlusCaps.supportsFirmwareOta)
 
         val fastPairBrand = DeviceProtocolRegistry.inferBrandByUuidStrings(
             deviceName = "Generic Wireless",

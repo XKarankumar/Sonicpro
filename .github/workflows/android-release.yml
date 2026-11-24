@@ -171,6 +171,7 @@ jobs:
           name: soniq-pro-failure-reports
           path: |
             ${{ env.ANDROID_PROJECT_DIR }}/app/build/reports/**
+            ${{ env.ANDROID_PROJECT_DIR }}/app/build/test-results/**
           if-no-files-found: ignore
           retention-days: 14
 

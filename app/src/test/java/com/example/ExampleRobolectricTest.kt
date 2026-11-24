@@ -5,6 +5,7 @@ import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollTo
 import androidx.test.core.app.ApplicationProvider
 import com.example.ui.viewmodel.SoniqViewModel
 import org.junit.Assert.assertEquals
@@ -15,7 +16,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [36])
+@Config(sdk = [36], qualifiers = "w412dp-h915dp-420dpi")
 class ExampleRobolectricTest {
 
     @get:Rule
@@ -45,14 +46,18 @@ class ExampleRobolectricTest {
         // Default state must always be LIVE HARDWARE (never silently faking telemetry)
         composeTestRule.onNodeWithTag("badge_live_hardware").assertIsDisplayed()
 
-        // Explicitly launch Demo Preview Sandbox
-        composeTestRule.onNodeWithTag("launch_demo_preview_button").performClick()
+        // Scroll to and explicitly launch Demo Preview Sandbox
+        composeTestRule.onNodeWithTag("launch_demo_preview_button")
+            .performScrollTo()
+            .performClick()
         composeTestRule.waitForIdle()
 
         composeTestRule.onNodeWithTag("badge_demo_preview").assertIsDisplayed()
 
         // Exit Demo returns cleanly to Live Hardware mode
-        composeTestRule.onNodeWithTag("exit_demo_button").performClick()
+        composeTestRule.onNodeWithTag("exit_demo_button")
+            .performScrollTo()
+            .performClick()
         composeTestRule.waitForIdle()
 
         composeTestRule.onNodeWithTag("badge_live_hardware").assertIsDisplayed()

@@ -63,7 +63,34 @@ android {
     compose = true
     buildConfig = true
   }
-  testOptions { unitTests { isIncludeAndroidResources = true } }
+  testOptions {
+    unitTests {
+      isIncludeAndroidResources = true
+      all { test ->
+        test.maxHeapSize = "2048m"
+        test.jvmArgs(
+          "--add-opens=java.base/java.lang=ALL-UNNAMED",
+          "--add-opens=java.base/java.lang.reflect=ALL-UNNAMED",
+          "--add-opens=java.base/java.io=ALL-UNNAMED",
+          "--add-opens=java.base/java.net=ALL-UNNAMED",
+          "--add-opens=java.base/java.security=ALL-UNNAMED",
+          "--add-opens=java.base/java.text=ALL-UNNAMED",
+          "--add-opens=java.base/java.util=ALL-UNNAMED",
+          "--add-opens=java.base/java.lang.invoke=ALL-UNNAMED",
+          "--add-opens=java.base/jdk.internal.access=ALL-UNNAMED",
+          "--add-exports=java.base/jdk.internal.access=ALL-UNNAMED",
+          "--add-opens=java.desktop/java.awt.font=ALL-UNNAMED"
+        )
+        test.testLogging {
+          events("passed", "skipped", "failed")
+          exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+          showExceptions = true
+          showCauses = true
+          showStackTraces = true
+        }
+      }
+    }
+  }
   dependenciesInfo {
     includeInApk = false
     includeInBundle = true
