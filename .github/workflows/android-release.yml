@@ -1,63 +1,157 @@
-name: SONIQ PRO Android CI & Signed Release
+name: SONIQ PRO Android CI & APK Build
 
 on:
   push:
-    branches: [ main, master ]
   pull_request:
-    branches: [ main, master ]
   workflow_dispatch:
 
 jobs:
-  test-and-build:
-    name: Test, Debug APK & Signed Release APK/AAB
+  build-android-apk:
+    name: Test & Build Android APK
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Set up JDK 17
+      - name: Detect Android Project Directory
+        id: detect_project
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -f "settings.gradle.kts" ] || [ -f "settings.gradle" ]; then
+            PROJECT_DIR="."
+          else
+            SETTINGS_FILE=$(find . -maxdepth 4 \( -name "settings.gradle.kts" -o -name "settings.gradle" \) | head -n 1 || true)
+            if [ -z "$SETTINGS_FILE" ]; then
+              echo "::error::Could not locate settings.gradle.kts or settings.gradle in the repository."
+              exit 1
+            fi
+            PROJECT_DIR=$(dirname "$SETTINGS_FILE")
+          fi
+          ABS_PROJECT_DIR=$(cd "$PROJECT_DIR" && pwd)
+          echo "ANDROID_PROJECT_DIR=$ABS_PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Detected Android project directory: $ABS_PROJECT_DIR"
+
+          if [ ! -f "$ABS_PROJECT_DIR/app/build.gradle.kts" ] && [ ! -f "$ABS_PROJECT_DIR/app/build.gradle" ]; then
+            echo "::error::Missing app/build.gradle(.kts) inside $ABS_PROJECT_DIR"
+            exit 1
+          fi
+
+      - name: Set up JDK 21 (Temurin)
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '17'
-          cache: gradle
+          java-version: '21'
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: 'platforms;android-36 build-tools;36.0.0 platform-tools'
 
-      - name: Grant Gradle Wrapper Execute Permission (if present)
+      - name: Accept Android SDK Licenses & Install Compile SDK 36.1
+        shell: bash
         run: |
-          if [ -f "./gradlew" ]; then chmod +x ./gradlew; fi
+          set -o pipefail
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          sdkmanager --install "platforms;android-36.1" > /dev/null 2>&1 || true
+
+      - name: Set up Gradle 9.3.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.3.1'
+
+      - name: Prepare Debug Keystore & Gradle Runner
+        id: gradle_prep
+        shell: bash
+        working-directory: ${{ env.ANDROID_PROJECT_DIR }}
+        run: |
+          set -euo pipefail
+          if [ -f "./gradlew" ]; then
+            chmod +x ./gradlew
+            echo "GRADLE_CMD=./gradlew" >> "$GITHUB_ENV"
+          else
+            echo "GRADLE_CMD=gradle" >> "$GITHUB_ENV"
+          fi
+
+          if [ ! -f "debug.keystore" ]; then
+            if [ -f "debug.keystore.base64" ]; then
+              base64 --decode debug.keystore.base64 > debug.keystore
+              echo "Decoded debug.keystore from debug.keystore.base64"
+            else
+              keytool -genkeypair -v \
+                -keystore debug.keystore \
+                -storepass android \
+                -alias androiddebugkey \
+                -keypass android \
+                -keyalg RSA \
+                -keysize 2048 \
+                -validity 10000 \
+                -dname "CN=Android Debug,O=Android,C=US"
+              echo "Generated standard debug.keystore for debugConfig signing"
+            fi
+          fi
 
       - name: Run Unit & Robolectric Tests
-        run: gradle :app:testDebugUnitTest
+        id: unit_tests
+        shell: bash
+        working-directory: ${{ env.ANDROID_PROJECT_DIR }}
+        run: |
+          set -euo pipefail
+          ${{ env.GRADLE_CMD }} :app:testDebugUnitTest --no-daemon --stacktrace
 
       - name: Build Debug APK
-        run: gradle :app:assembleDebug
+        id: build_debug
+        shell: bash
+        working-directory: ${{ env.ANDROID_PROJECT_DIR }}
+        run: |
+          set -euo pipefail
+          ${{ env.GRADLE_CMD }} :app:assembleDebug --no-daemon --stacktrace
 
-      - name: Decode Release Keystore (if configured)
+          APK_COUNT=$(find app/build/outputs/apk/debug -maxdepth 2 -name "*.apk" | wc -l)
+          if [ "$APK_COUNT" -eq 0 ]; then
+            echo "::error::assembleDebug finished but no .apk file was found under app/build/outputs/apk/debug"
+            exit 1
+          fi
+          find app/build/outputs/apk/debug -maxdepth 2 -name "*.apk" -exec ls -lh {} +
+
+      - name: Check Release Signing Configuration
         id: keystore
-        if: ${{ secrets.KEYSTORE_BASE64 != '' }}
+        shell: bash
         env:
           KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: |
-          echo "$KEYSTORE_BASE64" | base64 --decode > "${{ runner.temp }}/release-upload-key.jks"
-          echo "KEYSTORE_PATH=${{ runner.temp }}/release-upload-key.jks" >> "$GITHUB_ENV"
-          echo "has_keystore=true" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          if [ -n "${KEYSTORE_BASE64:-}" ] && [ -n "${STORE_PASSWORD:-}" ] && [ -n "${KEY_PASSWORD:-}" ]; then
+            echo "$KEYSTORE_BASE64" | base64 --decode > "${{ runner.temp }}/release-upload-key.jks"
+            echo "KEYSTORE_PATH=${{ runner.temp }}/release-upload-key.jks" >> "$GITHUB_ENV"
+            echo "has_keystore=true" >> "$GITHUB_OUTPUT"
+            echo "Release signing secrets detected; signed release build will run."
+          else
+            echo "has_keystore=false" >> "$GITHUB_OUTPUT"
+            echo "Release signing secrets not configured; skipping signed release build (Debug APK will still be uploaded)."
+          fi
 
       - name: Build Signed Release APK & AAB
         if: steps.keystore.outputs.has_keystore == 'true'
+        shell: bash
+        working-directory: ${{ env.ANDROID_PROJECT_DIR }}
         env:
           STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-        run: gradle :app:assembleRelease :app:bundleRelease
+        run: |
+          set -euo pipefail
+          ${{ env.GRADLE_CMD }} :app:assembleRelease :app:bundleRelease --no-daemon --stacktrace
 
       - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
         with:
           name: soniq-pro-debug-apk
-          path: app/build/outputs/apk/debug/*.apk
+          path: ${{ env.ANDROID_PROJECT_DIR }}/app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 30
 
       - name: Upload Signed Release Artifacts
         if: steps.keystore.outputs.has_keystore == 'true'
@@ -65,5 +159,29 @@ jobs:
         with:
           name: soniq-pro-signed-release
           path: |
-            app/build/outputs/apk/release/*.apk
-            app/build/outputs/bundle/release/*.aab
+            ${{ env.ANDROID_PROJECT_DIR }}/app/build/outputs/apk/release/*.apk
+            ${{ env.ANDROID_PROJECT_DIR }}/app/build/outputs/bundle/release/*.aab
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload Build & Test Diagnostics on Failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: soniq-pro-failure-reports
+          path: |
+            ${{ env.ANDROID_PROJECT_DIR }}/app/build/reports/**
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Write Build Summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## SONIQ PRO Android CI Summary"
+            echo "- **Project Dir:** \`${{ env.ANDROID_PROJECT_DIR }}\`"
+            echo "- **Unit Tests:** ${{ steps.unit_tests.outcome }}"
+            echo "- **Debug APK Build:** ${{ steps.build_debug.outcome }}"
+            echo "- **Signed Release Build:** $([ '${{ steps.keystore.outputs.has_keystore }}' = 'true' ] && echo 'Enabled' || echo 'Skipped (no release signing secrets)')"
+          } >> "$GITHUB_STEP_SUMMARY"
