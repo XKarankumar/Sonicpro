@@ -1,0 +1,6 @@
+{
+  "name": "SONIQ PRO",
+  "description": "Premium Android Bluetooth earbuds companion app with live BLE & Classic device discovery, battery telemetry, system equalizer DSP, modular protocol adapters, and diagnostics.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

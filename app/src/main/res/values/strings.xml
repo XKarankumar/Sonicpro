@@ -1,0 +1,14 @@
+<resources>
+    <string name="app_name">SONIQ PRO</string>
+    <string name="nav_home">Studio</string>
+    <string name="nav_sound">Sound</string>
+    <string name="nav_devices">Devices</string>
+    <string name="nav_system">System</string>
+    <string name="mode_live_badge">LIVE HARDWARE</string>
+    <string name="mode_demo_badge">DEMO PREVIEW • SIMULATED</string>
+    <string name="unsupported_feature">Unsupported on device</string>
+    <string name="permission_bt_title">Bluetooth Access Required</string>
+    <string name="permission_bt_rationale">SONIQ PRO needs Bluetooth Scan and Connect access to discover earbuds, read live battery and codec telemetry, and manage pairing. No data leaves your device.</string>
+    <string name="permission_location_rationale">Coarse location is used only when you request Last-Known Disconnect Location for Find Earbuds (or for BLE scanning on Android 11 and older).</string>
+    <string name="permission_notifications_rationale">Notification permission lets SONIQ PRO alert you when earbud battery drops below your threshold or when earbuds connect.</string>
+</resources>
