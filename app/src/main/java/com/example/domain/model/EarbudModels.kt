@@ -1,10 +1,5 @@
 package com.example.domain.model
 
-enum class DataSourceMode {
-    LIVE_HARDWARE,
-    DEMO_PREVIEW
-}
-
 enum class BluetoothConnectionState {
     UNAVAILABLE,
     BLUETOOTH_OFF,
@@ -14,65 +9,86 @@ enum class BluetoothConnectionState {
     DISCONNECTING
 }
 
+enum class AudioDeviceCategory(val label: String) {
+    EARBUDS("True Wireless Earbuds"),
+    HEADPHONES("Over-Ear / On-Ear Headphones"),
+    SPEAKER("Bluetooth Speaker"),
+    SOUNDBAR("Soundbar"),
+    HOME_THEATRE("Home Theatre / AVR")
+}
+
 enum class EarbudBrand(val displayName: String) {
     ONEPLUS("OnePlus"),
-    OPPO("OPPO"),
-    REALME("Realme"),
-    NOTHING("Nothing"),
-    SONY("Sony"),
     SAMSUNG("Samsung"),
-    APPLE("Apple / Beats"),
-    GOOGLE("Google Fast Pair"),
-    GENERIC_BT("Standard Bluetooth")
+    SONY("Sony"),
+    JBL("JBL"),
+    BOSE("Bose"),
+    APPLE("Apple AirPods"),
+    NOTHING("Nothing"),
+    REALME("Realme"),
+    OPPO("Oppo"),
+    VIVO("Vivo"),
+    XIAOMI("Xiaomi"),
+    BOAT("boAt"),
+    NOISE("Noise"),
+    SENNHEISER("Sennheiser"),
+    GENERIC_BT("Generic Bluetooth")
 }
 
 enum class AncMode(val label: String, val shortLabel: String) {
     OFF("Noise Control Off", "Off"),
     NOISE_CANCELLATION("Active Noise Cancellation", "ANC"),
     TRANSPARENCY("Transparency Mode", "Transparent"),
-    ADAPTIVE("Adaptive Ambient", "Adaptive")
+    ADAPTIVE("Adaptive ANC", "Adaptive")
 }
 
-enum class SpatialAudioMode(val label: String) {
-    OFF("Stereo Direct"),
-    FIXED_STAGE("Fixed Spatial Stage"),
-    HEAD_TRACKING("Dynamic Head Tracking")
+enum class SpatialImmersiveLevel(val label: String) {
+    NONE("Unavailable on Output"),
+    MULTICHANNEL("Multichannel Spatializer"),
+    BED_PLUS_OBJECTS("Spatial Audio + Objects"),
+    LEGACY_VIRTUALIZER("Legacy AudioFX Virtualizer")
 }
 
 enum class ThemePreference(val label: String) {
-    DARK_OLED("Obsidian Black (Default)"),
+    DARK_OLED("AMOLED Deep Black (Default)"),
     LIGHT_CRIMSON("Studio Light"),
     SYSTEM("Follow System")
 }
 
 enum class DashboardWidgetId(val title: String, val subtitle: String) {
-    BATTERY_TRIAD("Battery Telemetry", "Left, Right & Charging Case rings"),
-    ANC_CONTROL("Noise Control", "ANC, Transparency & Ambient levels"),
-    AUDIO_VISUALIZER("Acoustic Visualizer", "Real-time harmonic frequency pulse"),
-    QUICK_CONTROLS("Audio & Sensor Toggles", "Gaming, Spatial, In-Ear & Bass"),
-    CODEC_TELEMETRY("Codec & Link Quality", "Active Bluetooth audio codec & RSSI"),
-    MULTIPOINT_STATUS("Dual-Device Connection", "Primary and secondary paired hosts")
+    BATTERY_TRIAD("Live Battery Telemetry", "Left, Right, Case or combined battery"),
+    ANC_CONTROL("ANC & Smart Controls", "ANC, Transparency, Adaptive & Wear Detection"),
+    AUDIO_VISUALIZER("Acoustic Studio Profile", "Active EQ preset & DSP response"),
+    CODEC_TELEMETRY("Codec & Link Quality", "Active codec, sample rate, bit depth & RSSI"),
+    RECENT_DEVICES("Recently Connected", "Quick access to recent audio hardware")
 }
 
+data class FeatureAvailabilityItem(
+    val featureName: String,
+    val isSupported: Boolean,
+    val requirementNote: String
+)
+
 data class DeviceCapabilities(
+    val integrationId: String = "GenericBluetoothIntegration",
     val supportsIndividualBattery: Boolean = false,
     val supportsSingleBattery: Boolean = false,
     val supportsAncControl: Boolean = false,
     val supportsTransparencyMode: Boolean = false,
+    val supportsAdaptiveAnc: Boolean = false,
     val supportsAmbientIntensity: Boolean = false,
     val supportsCustomTouchGestures: Boolean = false,
-    val supportsLowLatencyGamingMode: Boolean = false,
-    val supportsSpatialAudioHardware: Boolean = false,
-    val supportsInEarDetection: Boolean = false,
-    val supportsDualDeviceMultipoint: Boolean = false,
-    val supportsCallMicControls: Boolean = false,
+    val supportsWearDetection: Boolean = false,
+    val supportsFindDevice: Boolean = true,
     val supportsFirmwareRead: Boolean = false,
-    val supportsFirmwareOta: Boolean = false,
     val supportsCodecInfo: Boolean = false,
     val supportsSystemEqualizer: Boolean = false,
     val supportsSystemBassBoost: Boolean = false,
-    val supportsSystemVirtualizer: Boolean = false,
-    val protocolNotes: String = ""
+    val supportsSystemVocalEnhancement: Boolean = false,
+    val supportsSpatializer: Boolean = false,
+    val supportsHeadTracking: Boolean = false,
+    val protocolNotes: String = "",
+    val featureMatrix: List<FeatureAvailabilityItem> = emptyList()
 )
 
 data class AudioCodecInfo(
@@ -90,46 +106,29 @@ data class BatteryTelemetry(
     val isLeftCharging: Boolean = false,
     val isRightCharging: Boolean = false,
     val isCaseCharging: Boolean = false,
-    val sourceLabel: String = "Not reported",
+    val sourceLabel: String = "Unavailable from device",
     val lastUpdatedMs: Long = System.currentTimeMillis()
 ) {
     val hasAnyReading: Boolean
         get() = leftPercent != null || rightPercent != null || casePercent != null || singlePercent != null
 }
 
-data class MultipointHost(
-    val hostName: String,
-    val hostType: String,
-    val isActiveAudioSource: Boolean,
-    val isConnected: Boolean
-)
-
 data class EarbudsDevice(
     val address: String,
     val name: String,
     val brand: EarbudBrand,
+    val category: AudioDeviceCategory = AudioDeviceCategory.EARBUDS,
     val rssiDbm: Int? = null,
     val isBonded: Boolean = false,
     val isAudioDevice: Boolean = true,
     val connectionState: BluetoothConnectionState = BluetoothConnectionState.DISCONNECTED,
-    val isCaseOpen: Boolean = false,
     val battery: BatteryTelemetry = BatteryTelemetry(),
-    val ancMode: AncMode = AncMode.OFF,
-    val ancIntensity: Float = 0.75f,
-    val gamingModeEnabled: Boolean = false,
-    val spatialAudioMode: SpatialAudioMode = SpatialAudioMode.OFF,
-    val inEarDetectionEnabled: Boolean = false,
-    val autoPlayPauseEnabled: Boolean = false,
-    val dualDeviceEnabled: Boolean = false,
-    val callNoiseReductionEnabled: Boolean = false,
-    val micSidetoneEnabled: Boolean = false,
     val codecInfo: AudioCodecInfo? = null,
     val firmwareVersion: String? = null,
     val hardwareRevision: String? = null,
     val manufacturerName: String? = null,
-    val capabilities: DeviceCapabilities = DeviceCapabilities(),
-    val dataSourceMode: DataSourceMode = DataSourceMode.LIVE_HARDWARE,
-    val multipointHosts: List<MultipointHost> = emptyList()
+    val modelNumber: String? = null,
+    val capabilities: DeviceCapabilities = DeviceCapabilities()
 )
 
 data class EqBandState(
@@ -141,25 +140,33 @@ data class EqBandState(
     val maxMb: Int
 )
 
-enum class EqPresetId(val displayName: String, val description: String, val curveMb: List<Int>) {
-    STUDIO_REFERENCE("Studio Reference", "Flat neutral mastering curve", listOf(0, 0, 0, 0, 0)),
-    ONEPLUS_BOLD_BASS("Crimson Bass", "Deep sub-bass punch with crisp highs", listOf(550, 320, -100, 180, 300)),
-    VOCAL_CLARITY("Vocal Presence", "Forward mids for podcasts and vocals", listOf(-150, 100, 420, 350, 100)),
-    ACOUSTIC_STAGE("Acoustic Air", "Warm lows and airy harmonic sparkle", listOf(180, 120, 80, 260, 420)),
-    ELECTRONIC_PULSE("Electronic Pulse", "V-shaped club energy", listOf(480, 200, -180, 240, 460)),
-    CUSTOM("Custom Curve", "User tuned frequency response", listOf(0, 0, 0, 0, 0))
+enum class EqPresetId(
+    val displayName: String,
+    val description: String,
+    val targetCurveDb: List<Float>
+) {
+    STUDIO_REFERENCE("Studio Reference", "Flat neutral mastering curve", listOf(0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f)),
+    MUSIC("Music", "Balanced dynamic sparkle with warm sub-bass", listOf(2.5f, 3.0f, 1.5f, 0f, -0.5f, 0.5f, 1.5f, 2.5f, 3.0f, 2.0f)),
+    CINEMA("Cinema", "Wide soundstage, deep LFE rumble & dialogue clarity", listOf(4.5f, 4.0f, 2.0f, -0.5f, 1.0f, 2.5f, 3.0f, 2.0f, 1.5f, 1.0f)),
+    GAMING_AUDIO("Gaming Audio", "Footstep & directional cue emphasis", listOf(-1.0f, 0.5f, 1.5f, 1.0f, 0.5f, 2.0f, 3.5f, 4.0f, 3.0f, 1.5f)),
+    BASS_ENHANCEMENT("Bass Boost", "Sub-bass and punchy low-end extension", listOf(6.0f, 5.5f, 4.0f, 2.0f, 0f, 0f, 0.5f, 1.0f, 1.5f, 1.0f)),
+    VOCAL_ENHANCEMENT("Vocal Clarity", "Presence & dialogue intelligibility lift", listOf(-2.0f, -1.5f, -0.5f, 1.5f, 3.5f, 4.5f, 4.0f, 2.0f, 0.5f, 0f)),
+    CUSTOM("Custom", "User-tuned parametric curve", listOf(0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f, 0f))
 }
 
 data class EqualizerState(
     val isEngineAvailable: Boolean = false,
     val isEnabled: Boolean = true,
+    val hardwareBandCount: Int = 5,
     val activePreset: EqPresetId = EqPresetId.STUDIO_REFERENCE,
     val bands: List<EqBandState> = defaultBands(),
     val bassBoostAvailable: Boolean = false,
     val bassBoostStrength: Int = 0, // 0..1000
+    val vocalEnhancerAvailable: Boolean = false,
+    val vocalGainMb: Int = 0, // 0..1500
     val virtualizerAvailable: Boolean = false,
     val virtualizerStrength: Int = 0, // 0..1000
-    val statusMessage: String = "System AudioFX DSP ready"
+    val statusMessage: String = "Initializing AudioFX DSP..."
 ) {
     companion object {
         fun defaultBands(): List<EqBandState> = listOf(
@@ -172,34 +179,52 @@ data class EqualizerState(
     }
 }
 
+data class SpatialAudioCapabilityState(
+    val apiSupported: Boolean = false,
+    val isAvailable: Boolean = false,
+    val isEnabled: Boolean = false,
+    val immersiveLevel: SpatialImmersiveLevel = SpatialImmersiveLevel.NONE,
+    val isHeadTrackerAvailable: Boolean = false,
+    val isHeadTrackerEnabled: Boolean = false,
+    val supportsStereo: Boolean = true,
+    val supports5Point1: Boolean = false,
+    val supports7Point1: Boolean = false,
+    val supportsDolbyMultichannel: Boolean = false,
+    val explanation: String = "Requires Android 13 (API 33+) Spatializer HAL support."
+)
+
 enum class EarbudSide(val label: String) {
     LEFT("Left Earbud"),
     RIGHT("Right Earbud")
 }
 
-enum class TouchTrigger(val label: String) {
-    SINGLE_TAP("Single Tap"),
-    DOUBLE_TAP("Double Tap"),
-    TRIPLE_TAP("Triple Tap"),
-    TOUCH_AND_HOLD("Touch & Hold")
-}
+data class TheatreNetworkDevice(
+    val serviceName: String,
+    val serviceType: String,
+    val protocolLabel: String,
+    val hostAddress: String?,
+    val port: Int?,
+    val modelHint: String?,
+    val isResolved: Boolean
+)
 
-enum class TouchAction(val label: String) {
-    PLAY_PAUSE("Play / Pause"),
-    NEXT_TRACK("Next Track"),
-    PREVIOUS_TRACK("Previous Track"),
-    VOICE_ASSISTANT("Voice Assistant"),
-    CYCLE_ANC("Cycle ANC / Transparency"),
-    VOLUME_UP("Volume Up"),
-    VOLUME_DOWN("Volume Down"),
-    GAMING_MODE("Toggle Low Latency"),
-    NONE("Disabled")
-}
+data class AudioOutputRoute(
+    val id: Int,
+    val productName: String,
+    val typeLabel: String,
+    val isHomeTheatreCapable: Boolean,
+    val supportedEncodings: List<String>
+)
 
-data class GestureMapping(
-    val side: EarbudSide,
-    val trigger: TouchTrigger,
-    val action: TouchAction
+data class TheatreEcosystemState(
+    val isWifiConnected: Boolean = false,
+    val isScanningNetwork: Boolean = false,
+    val discoveredNetworkDevices: List<TheatreNetworkDevice> = emptyList(),
+    val activeOutputRoutes: List<AudioOutputRoute> = emptyList(),
+    val currentStreamVolume: Int = 0,
+    val maxStreamVolume: Int = 15,
+    val isMuted: Boolean = false,
+    val statusMessage: String = "Ready for Home Theatre & Speaker discovery"
 )
 
 data class LastKnownLocationRecord(

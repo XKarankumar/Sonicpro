@@ -148,7 +148,7 @@ jobs:
       - name: Upload Debug APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: soniq-pro-debug-apk
+          name: soniq-debug-apk
           path: ${{ env.ANDROID_PROJECT_DIR }}/app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 30
@@ -157,7 +157,7 @@ jobs:
         if: steps.keystore.outputs.has_keystore == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: soniq-pro-signed-release
+          name: soniq-signed-release
           path: |
             ${{ env.ANDROID_PROJECT_DIR }}/app/build/outputs/apk/release/*.apk
             ${{ env.ANDROID_PROJECT_DIR }}/app/build/outputs/bundle/release/*.aab
@@ -168,7 +168,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: soniq-pro-failure-reports
+          name: soniq-failure-reports
           path: |
             ${{ env.ANDROID_PROJECT_DIR }}/app/build/reports/**
             ${{ env.ANDROID_PROJECT_DIR }}/app/build/test-results/**
@@ -180,7 +180,7 @@ jobs:
         shell: bash
         run: |
           {
-            echo "## SONIQ PRO Android CI Summary"
+            echo "## SONIQ Android CI Summary"
             echo "- **Project Dir:** \`${{ env.ANDROID_PROJECT_DIR }}\`"
             echo "- **Unit Tests:** ${{ steps.unit_tests.outcome }}"
             echo "- **Debug APK Build:** ${{ steps.build_debug.outcome }}"

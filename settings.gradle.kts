@@ -22,6 +22,6 @@ dependencyResolutionManagement {
   }
 }
 
-rootProject.name = "SONIQ PRO"
+rootProject.name = "SONIQ"
 
 include(":app")

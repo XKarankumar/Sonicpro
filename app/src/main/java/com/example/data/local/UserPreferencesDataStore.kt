@@ -28,8 +28,9 @@ data class StoredAppPreferences(
     val notificationSettings: NotificationSettings = NotificationSettings(),
     val diagnosticsConsentGranted: Boolean = false,
     val activeEqPreset: EqPresetId = EqPresetId.STUDIO_REFERENCE,
-    val eqBandsMb: List<Int> = EqPresetId.STUDIO_REFERENCE.curveMb,
-    val bassBoostStrength: Int = 180,
+    val eqBandsMb: List<Int> = emptyList(),
+    val bassBoostStrength: Int = 0,
+    val vocalGainMb: Int = 0,
     val virtualizerStrength: Int = 0,
     val eqEnabled: Boolean = true,
     val lastKnownLocation: LastKnownLocationRecord? = null
@@ -50,6 +51,7 @@ class UserPreferencesDataStore(private val context: Context) {
         val EQ_PRESET = stringPreferencesKey("eq_preset")
         val EQ_BANDS_CSV = stringPreferencesKey("eq_bands_csv")
         val BASS_BOOST = intPreferencesKey("bass_boost_strength")
+        val VOCAL_GAIN_MB = intPreferencesKey("vocal_gain_mb")
         val VIRTUALIZER = intPreferencesKey("virtualizer_strength")
         val EQ_ENABLED = booleanPreferencesKey("eq_enabled")
         val LOC_DEVICE_NAME = stringPreferencesKey("loc_device_name")
@@ -86,12 +88,12 @@ class UserPreferencesDataStore(private val context: Context) {
         val eqBands = prefs[Keys.EQ_BANDS_CSV]
             ?.split(",")
             ?.mapNotNull { it.toIntOrNull() }
-            ?.takeIf { it.size == 5 }
-            ?: eqPreset.curveMb
+            ?.takeIf { it.size in 1..10 }
+            ?: emptyList()
 
         val location = if (prefs.contains(Keys.LOC_LAT) && prefs.contains(Keys.LOC_LON)) {
             LastKnownLocationRecord(
-                deviceName = prefs[Keys.LOC_DEVICE_NAME] ?: "Bluetooth Earbuds",
+                deviceName = prefs[Keys.LOC_DEVICE_NAME] ?: "Bluetooth Audio Device",
                 deviceAddress = prefs[Keys.LOC_DEVICE_ADDR] ?: "",
                 latitude = prefs[Keys.LOC_LAT] ?: 0.0,
                 longitude = prefs[Keys.LOC_LON] ?: 0.0,
@@ -114,7 +116,8 @@ class UserPreferencesDataStore(private val context: Context) {
             diagnosticsConsentGranted = prefs[Keys.DIAGNOSTICS_CONSENT] ?: false,
             activeEqPreset = eqPreset,
             eqBandsMb = eqBands,
-            bassBoostStrength = prefs[Keys.BASS_BOOST] ?: 180,
+            bassBoostStrength = prefs[Keys.BASS_BOOST] ?: 0,
+            vocalGainMb = prefs[Keys.VOCAL_GAIN_MB] ?: 0,
             virtualizerStrength = prefs[Keys.VIRTUALIZER] ?: 0,
             eqEnabled = prefs[Keys.EQ_ENABLED] ?: true,
             lastKnownLocation = location
@@ -153,6 +156,7 @@ class UserPreferencesDataStore(private val context: Context) {
         preset: EqPresetId,
         bandsMb: List<Int>,
         bassBoostStrength: Int,
+        vocalGainMb: Int,
         virtualizerStrength: Int,
         eqEnabled: Boolean
     ) {
@@ -160,6 +164,7 @@ class UserPreferencesDataStore(private val context: Context) {
             it[Keys.EQ_PRESET] = preset.name
             it[Keys.EQ_BANDS_CSV] = bandsMb.joinToString(",")
             it[Keys.BASS_BOOST] = bassBoostStrength.coerceIn(0, 1000)
+            it[Keys.VOCAL_GAIN_MB] = vocalGainMb.coerceIn(0, 1500)
             it[Keys.VIRTUALIZER] = virtualizerStrength.coerceIn(0, 1000)
             it[Keys.EQ_ENABLED] = eqEnabled
         }

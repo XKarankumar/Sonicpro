@@ -67,6 +67,11 @@ android {
     unitTests {
       isIncludeAndroidResources = true
       all { test ->
+        test.systemProperty(
+          "robolectric.dependency.repo.url",
+          "https://maven-central.storage-download.googleapis.com/maven2"
+        )
+        test.systemProperty("robolectric.dependency.repo.id", "google-maven-central")
         test.maxHeapSize = "2048m"
         test.jvmArgs(
           "--add-opens=java.base/java.lang=ALL-UNNAMED",

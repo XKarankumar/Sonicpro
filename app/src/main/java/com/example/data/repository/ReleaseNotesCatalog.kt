@@ -10,10 +10,10 @@ object ReleaseNotesCatalog {
             releaseDate = "2026-11-24",
             isCurrent = true,
             highlights = listOf(
-                "Modular Bluetooth protocol adapters for standard A2DP/HFP, BLE GATT (0x180F / 0x180A), Google Fast Pair, and OnePlus/OPPO identification.",
-                "Live Android AudioFX 5-band Equalizer, Bass Boost, and Spatial Virtualizer DSP engine.",
-                "Versioned JSON backup & restore for device profiles with schema backward compatibility.",
-                "Consent-gated diagnostics suite and clear Live Hardware vs Demo Preview separation."
+                "SONIQ Universal Audio Intelligence Platform supporting 15 brands across 8 modular OEM integrations.",
+                "Up-to-10-band Android AudioFX Studio Equalizer, Bass Boost, LoudnessEnhancer Vocal Clarity, and 7 acoustic presets.",
+                "Home Theatre Ecosystem module with live LAN mDNS discovery (Cast, AirPlay, Sonos, Spotify Connect, DLNA), HDMI ARC/eARC routing, and stream controls.",
+                "Real Android 13+ Spatializer 3D Audio & IMU head-tracking inspector with strict unavailable-feature transparency."
             )
         ),
         AppReleaseNote(
@@ -21,15 +21,15 @@ object ReleaseNotesCatalog {
             releaseDate = "2026-10-12",
             highlights = listOf(
                 "Added battery and connection event timeline persisted locally via Room.",
-                "Added stereo / Left / Right acoustic locator chime for Find My Earbuds.",
-                "Introduced customizable Studio dashboard widgets and OLED Dark / Studio Light themes."
+                "Added stereo / Left / Right acoustic locator chime for Find Device.",
+                "Introduced OLED Dark & Studio Light themes with JSON backup and restore."
             )
         ),
         AppReleaseNote(
             versionName = "1.0.0",
             releaseDate = "2026-09-01",
             highlights = listOf(
-                "Initial release of SONIQ PRO companion studio.",
+                "Initial release of SONIQ Bluetooth audio companion.",
                 "Bluetooth LE & Classic discovery with Android 12+ neverForLocation scan compliance."
             )
         )

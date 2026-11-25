@@ -36,6 +36,7 @@ data class DeviceProfileEntity(
     val eqPresetName: String,
     val eqBandsCsv: String,
     val bassBoostStrength: Int,
+    val vocalGainMb: Int = 0,
     val virtualizerStrength: Int,
     val gamingModePreferred: Boolean,
     val gesturesJson: String,

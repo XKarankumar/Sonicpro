@@ -30,8 +30,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Bluetooth
 import androidx.compose.material.icons.rounded.Bolt
+import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Lock
-import androidx.compose.material.icons.rounded.Science
 import androidx.compose.material.icons.rounded.Verified
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -56,9 +56,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import com.example.domain.model.AncMode
-import com.example.domain.model.DataSourceMode
-import com.example.ui.theme.DemoAmber
+import com.example.domain.model.FeatureAvailabilityItem
 import com.example.ui.theme.LiveEmerald
 import kotlin.math.PI
 import kotlin.math.sin
@@ -105,17 +103,14 @@ fun SoniqGlassCard(
 }
 
 @Composable
-fun DataSourceModePill(
-    mode: DataSourceMode,
+fun LiveTelemetryBadge(
+    label: String = "LIVE TELEMETRY",
+    isActive: Boolean = true,
     modifier: Modifier = Modifier
 ) {
-    val isLive = mode == DataSourceMode.LIVE_HARDWARE
-    val tint = if (isLive) LiveEmerald else DemoAmber
-    val label = if (isLive) "LIVE HARDWARE" else "DEMO PREVIEW • SIMULATED"
-    val icon = if (isLive) Icons.Rounded.Verified else Icons.Rounded.Science
-
+    val tint = if (isActive) LiveEmerald else MaterialTheme.colorScheme.onSurfaceVariant
     Surface(
-        modifier = modifier.testTag(if (isLive) "badge_live_hardware" else "badge_demo_preview"),
+        modifier = modifier.testTag("badge_live_telemetry"),
         color = tint.copy(alpha = 0.14f),
         shape = RoundedCornerShape(50),
         border = BorderStroke(1.dp, tint.copy(alpha = 0.45f))
@@ -126,7 +121,7 @@ fun DataSourceModePill(
             horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
             Icon(
-                imageVector = icon,
+                imageVector = Icons.Rounded.Verified,
                 contentDescription = label,
                 tint = tint,
                 modifier = Modifier.size(13.dp)
@@ -144,15 +139,15 @@ fun DataSourceModePill(
 }
 
 @Composable
-fun UnsupportedBadge(
-    text: String = "Unsupported",
+fun UnavailableBadge(
+    text: String = "UNAVAILABLE",
     modifier: Modifier = Modifier
 ) {
     Surface(
         modifier = modifier,
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f),
         shape = RoundedCornerShape(50),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.6f))
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.65f))
     ) {
         Row(
             modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
@@ -169,8 +164,63 @@ fun UnsupportedBadge(
                 text = text,
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontWeight = FontWeight.SemiBold,
                 maxLines = 1
             )
+        }
+    }
+}
+
+@Composable
+fun FeatureMatrixList(
+    items: List<FeatureAvailabilityItem>,
+    modifier: Modifier = Modifier
+) {
+    Column(
+        modifier = modifier,
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        items.forEach { item ->
+            Surface(
+                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.48f),
+                shape = RoundedCornerShape(14.dp),
+                border = BorderStroke(
+                    1.dp,
+                    if (item.isSupported) LiveEmerald.copy(alpha = 0.35f)
+                    else MaterialTheme.colorScheme.outline.copy(alpha = 0.3f)
+                )
+            ) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = if (item.isSupported) Icons.Rounded.CheckCircle else Icons.Rounded.Lock,
+                        contentDescription = if (item.isSupported) "Supported" else "Unavailable",
+                        tint = if (item.isSupported) LiveEmerald else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = item.featureName,
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            text = item.requirementNote,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    if (!item.isSupported) {
+                        Spacer(modifier = Modifier.width(8.dp))
+                        UnavailableBadge()
+                    }
+                }
+            }
         }
     }
 }
@@ -257,7 +307,9 @@ fun AnimatedBatteryRing(
         Text(
             text = label,
             style = MaterialTheme.typography.labelMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
         )
     }
 }
@@ -265,7 +317,6 @@ fun AnimatedBatteryRing(
 @Composable
 fun AcousticVisualizerCanvas(
     isActive: Boolean,
-    ancMode: AncMode,
     eqBandsMb: List<Int>,
     modifier: Modifier = Modifier
 ) {
@@ -281,12 +332,7 @@ fun AcousticVisualizerCanvas(
     )
 
     val primary = MaterialTheme.colorScheme.primary
-    val secondary = when (ancMode) {
-        AncMode.NOISE_CANCELLATION -> Color(0xFFFF2E55)
-        AncMode.TRANSPARENCY -> LiveEmerald
-        AncMode.ADAPTIVE -> DemoAmber
-        AncMode.OFF -> MaterialTheme.colorScheme.onSurfaceVariant
-    }
+    val secondary = if (isActive) Color(0xFFFF2E55) else MaterialTheme.colorScheme.onSurfaceVariant
 
     Canvas(modifier = modifier) {
         val barCount = 28
@@ -301,7 +347,7 @@ fun AcousticVisualizerCanvas(
             val wave = if (isActive) {
                 (0.45f + 0.55f * ((sin(phase + i * 0.45f) + 1f) / 2f)) * eqBoost
             } else {
-                0.18f * eqBoost
+                0.22f * eqBoost
             }
             val barH = (size.height * 0.86f * wave).coerceAtLeast(6.dp.toPx())
             val x = i * (barWidth + spacing)
@@ -310,7 +356,7 @@ fun AcousticVisualizerCanvas(
                 topLeft = Offset(x, centerY - barH / 2f),
                 size = Size(barWidth, barH),
                 cornerRadius = CornerRadius(barWidth / 2f, barWidth / 2f),
-                alpha = if (isActive) 0.92f else 0.42f
+                alpha = if (isActive) 0.92f else 0.45f
             )
         }
     }

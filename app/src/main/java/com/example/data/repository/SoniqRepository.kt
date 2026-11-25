@@ -1,10 +1,13 @@
 package com.example.data.repository
 
 import android.content.Context
+import android.os.Build
+import com.example.BuildConfig
 import com.example.data.bluetooth.AndroidBluetoothController
 import com.example.data.bluetooth.AudioFxDspEngine
 import com.example.data.bluetooth.BluetoothHardwareSnapshot
 import com.example.data.bluetooth.FindEarbudsEngine
+import com.example.data.bluetooth.HomeTheatreManager
 import com.example.data.bluetooth.SoniqNotificationHelper
 import com.example.data.local.BatteryHistoryEntity
 import com.example.data.local.ConnectionEventEntity
@@ -14,6 +17,7 @@ import com.example.data.local.SettingsBackupManager
 import com.example.data.local.SoniqDao
 import com.example.data.local.StoredAppPreferences
 import com.example.data.local.UserPreferencesDataStore
+import com.example.domain.integration.OemIntegrationRegistry
 import com.example.domain.model.BatteryTelemetry
 import com.example.domain.model.DashboardWidgetId
 import com.example.domain.model.DiagnosticCheckResult
@@ -22,6 +26,8 @@ import com.example.domain.model.EqPresetId
 import com.example.domain.model.EqualizerState
 import com.example.domain.model.LastKnownLocationRecord
 import com.example.domain.model.NotificationSettings
+import com.example.domain.model.SpatialAudioCapabilityState
+import com.example.domain.model.TheatreEcosystemState
 import com.example.domain.model.ThemePreference
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -42,7 +48,8 @@ class SoniqRepository(
 ) {
     private val repoScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    private val audioFxEngine = AudioFxDspEngine()
+    private val audioFxEngine = AudioFxDspEngine(context)
+    private val homeTheatreManager = HomeTheatreManager(context, repoScope)
     private val findEngine = FindEarbudsEngine(context)
     private val notificationHelper = SoniqNotificationHelper(context)
 
@@ -71,10 +78,12 @@ class SoniqRepository(
                 if (event == "CONNECTION_UPDATE" && prefs.notificationSettings.connectionAlertEnabled) {
                     notificationHelper.postAlert(
                         notificationId = 1001,
-                        title = "Earbuds Status: $name",
+                        title = "Audio Device: $name",
                         body = detail
                     )
                 }
+                refreshSpatializer()
+                homeTheatreManager.refreshRoutesAndVolume()
             }
         },
         onBatteryObserved = { address, name, battery ->
@@ -104,11 +113,25 @@ class SoniqRepository(
                     lastLowBatteryAlertAddress = address
                     notificationHelper.postAlert(
                         notificationId = 1002,
-                        title = "Low Earbud Battery ($lowest%)",
+                        title = "Low Device Battery ($lowest%)",
                         body = "$name dropped below ${prefs.notificationSettings.batteryLowThreshold}%."
                     )
                 } else if (lowest != null && lowest > prefs.notificationSettings.batteryLowThreshold + 5) {
                     lastLowBatteryAlertAddress = null
+                }
+            }
+        },
+        onErrorLogged = { category, message ->
+            repoScope.launch {
+                val prefs = prefsDataStore.preferencesFlow.first()
+                if (prefs.diagnosticsConsentGranted) {
+                    dao.insertDiagnosticLog(
+                        DiagnosticLogEntity(
+                            category = category,
+                            message = message,
+                            severity = "ERROR"
+                        )
+                    )
                 }
             }
         }
@@ -117,6 +140,10 @@ class SoniqRepository(
     private val _equalizerState = MutableStateFlow(EqualizerState())
     val equalizerState: StateFlow<EqualizerState> = _equalizerState.asStateFlow()
 
+    private val _spatialState = MutableStateFlow(SpatialAudioCapabilityState())
+    val spatialState: StateFlow<SpatialAudioCapabilityState> = _spatialState.asStateFlow()
+
+    val theatreState: StateFlow<TheatreEcosystemState> = homeTheatreManager.state
     val bluetoothSnapshot: StateFlow<BluetoothHardwareSnapshot> = bluetoothController.snapshot
     val preferencesFlow: Flow<StoredAppPreferences> = prefsDataStore.preferencesFlow
     val batteryHistoryFlow: Flow<List<BatteryHistoryEntity>> = dao.observeBatteryHistory()
@@ -127,13 +154,18 @@ class SoniqRepository(
     fun startHardwareServices() {
         val initialEq = audioFxEngine.initialize()
         _equalizerState.value = initialEq
-        bluetoothController.updateAudioFxAvailability(
+        val spatial = audioFxEngine.inspectSpatializer()
+        _spatialState.value = spatial
+        bluetoothController.updateAudioCapabilities(
             eqAvailable = initialEq.isEngineAvailable,
             bassAvailable = initialEq.bassBoostAvailable,
-            virtAvailable = initialEq.virtualizerAvailable
+            vocalAvailable = initialEq.vocalEnhancerAvailable,
+            spatial = spatial
         )
         bluetoothController.start()
+        homeTheatreManager.refreshRoutesAndVolume()
         repoScope.launch {
+            flushPendingCrashReport()
             val stored = prefsDataStore.preferencesFlow.first()
             applyStoredAudioDsp(stored)
         }
@@ -141,18 +173,41 @@ class SoniqRepository(
 
     fun stopHardwareServices() {
         findEngine.stopLocatorChime()
+        homeTheatreManager.stopNetworkDiscovery()
         bluetoothController.stop()
         audioFxEngine.release()
     }
 
+    private suspend fun flushPendingCrashReport() {
+        val crashPrefs = context.getSharedPreferences("soniq_crash_prefs", Context.MODE_PRIVATE)
+        val summary = crashPrefs.getString("last_crash_summary", null) ?: return
+        val consent = prefsDataStore.preferencesFlow.first().diagnosticsConsentGranted
+        if (consent) {
+            dao.insertDiagnosticLog(
+                DiagnosticLogEntity(
+                    category = "crash_recovery",
+                    message = summary,
+                    severity = "ERROR"
+                )
+            )
+        }
+        crashPrefs.edit().remove("last_crash_summary").remove("last_crash_time").apply()
+    }
+
     private fun applyStoredAudioDsp(stored: StoredAppPreferences) {
+        val currentBands = _equalizerState.value.bands
+        val targetLevels = when {
+            stored.eqBandsMb.isNotEmpty() -> stored.eqBandsMb
+            else -> audioFxEngine.mapPresetToHardwareBands(stored.activeEqPreset, currentBands)
+        }
         audioFxEngine.setEqualizerEnabled(stored.eqEnabled)
-        audioFxEngine.applyBands(stored.eqBandsMb)
+        audioFxEngine.applyBands(targetLevels)
         audioFxEngine.setBassBoostStrength(stored.bassBoostStrength)
+        audioFxEngine.setVocalGainMb(stored.vocalGainMb)
         audioFxEngine.setVirtualizerStrength(stored.virtualizerStrength)
         _equalizerState.update { current ->
             val updatedBands = current.bands.mapIndexed { idx, band ->
-                val target = stored.eqBandsMb.getOrElse(idx) { band.levelMb }
+                val target = targetLevels.getOrElse(idx) { band.levelMb }
                     .coerceIn(band.minMb, band.maxMb)
                 band.copy(levelMb = target)
             }
@@ -161,9 +216,22 @@ class SoniqRepository(
                 activePreset = stored.activeEqPreset,
                 bands = updatedBands,
                 bassBoostStrength = stored.bassBoostStrength,
+                vocalGainMb = stored.vocalGainMb,
                 virtualizerStrength = stored.virtualizerStrength
             )
         }
+    }
+
+    fun refreshSpatializer() {
+        val spatial = audioFxEngine.inspectSpatializer()
+        _spatialState.value = spatial
+        val eq = _equalizerState.value
+        bluetoothController.updateAudioCapabilities(
+            eqAvailable = eq.isEngineAvailable,
+            bassAvailable = eq.bassBoostAvailable,
+            vocalAvailable = eq.vocalEnhancerAvailable,
+            spatial = spatial
+        )
     }
 
     suspend fun setEqualizerEnabled(enabled: Boolean) {
@@ -173,10 +241,12 @@ class SoniqRepository(
     }
 
     suspend fun selectEqPreset(preset: EqPresetId) {
-        audioFxEngine.applyBands(preset.curveMb)
+        val currentBands = _equalizerState.value.bands
+        val mapped = audioFxEngine.mapPresetToHardwareBands(preset, currentBands)
+        audioFxEngine.applyBands(mapped)
         _equalizerState.update { state ->
             val bands = state.bands.mapIndexed { i, band ->
-                band.copy(levelMb = preset.curveMb.getOrElse(i) { 0 }.coerceIn(band.minMb, band.maxMb))
+                band.copy(levelMb = mapped.getOrElse(i) { 0 }.coerceIn(band.minMb, band.maxMb))
             }
             state.copy(activePreset = preset, bands = bands)
         }
@@ -202,6 +272,13 @@ class SoniqRepository(
         persistCurrentDsp()
     }
 
+    suspend fun setVocalGainMb(gainMb: Int) {
+        val clamped = gainMb.coerceIn(0, 1500)
+        audioFxEngine.setVocalGainMb(clamped)
+        _equalizerState.update { it.copy(vocalGainMb = clamped) }
+        persistCurrentDsp()
+    }
+
     suspend fun setVirtualizerStrength(strength: Int) {
         val clamped = strength.coerceIn(0, 1000)
         audioFxEngine.setVirtualizerStrength(clamped)
@@ -215,18 +292,25 @@ class SoniqRepository(
             preset = eq.activePreset,
             bandsMb = eq.bands.map { it.levelMb },
             bassBoostStrength = eq.bassBoostStrength,
+            vocalGainMb = eq.vocalGainMb,
             virtualizerStrength = eq.virtualizerStrength,
             eqEnabled = eq.isEnabled
         )
     }
 
+    // Home Theatre Ecosystem actions
+    fun startTheatreScan() = homeTheatreManager.startNetworkDiscovery()
+    fun stopTheatreScan() = homeTheatreManager.stopNetworkDiscovery()
+    fun refreshTheatreRoutes() = homeTheatreManager.refreshRoutesAndVolume()
+    fun setTheatreVolume(volume: Int) = homeTheatreManager.setStreamVolume(volume)
+    fun toggleTheatreMute() = homeTheatreManager.toggleMute()
+    fun dispatchMediaKey(keyCode: Int) = homeTheatreManager.dispatchMediaKey(keyCode)
+
     fun startFindChime(side: EarbudSide?, onStopped: () -> Unit) {
         findEngine.startLocatorChime(repoScope, side, onStopped)
     }
 
-    fun stopFindChime() {
-        findEngine.stopLocatorChime()
-    }
+    fun stopFindChime() = findEngine.stopLocatorChime()
 
     suspend fun captureLastKnownLocationNow(deviceName: String, address: String): LastKnownLocationRecord? {
         val rec = findEngine.captureCoarseLastKnownLocation(deviceName, address) ?: return null
@@ -234,9 +318,7 @@ class SoniqRepository(
         return rec
     }
 
-    fun triggerHaptic() {
-        findEngine.vibrateTap()
-    }
+    fun triggerHaptic() = findEngine.vibrateTap()
 
     suspend fun setThemePreference(theme: ThemePreference) = prefsDataStore.setThemePreference(theme)
 
@@ -252,9 +334,7 @@ class SoniqRepository(
     suspend fun saveProfile(
         profileName: String,
         deviceName: String,
-        deviceAddress: String,
-        gamingModePreferred: Boolean,
-        gesturesJson: String
+        deviceAddress: String
     ) {
         val eq = _equalizerState.value
         dao.insertDeviceProfile(
@@ -265,27 +345,35 @@ class SoniqRepository(
                 eqPresetName = eq.activePreset.name,
                 eqBandsCsv = eq.bands.joinToString(",") { it.levelMb.toString() },
                 bassBoostStrength = eq.bassBoostStrength,
+                vocalGainMb = eq.vocalGainMb,
                 virtualizerStrength = eq.virtualizerStrength,
-                gamingModePreferred = gamingModePreferred,
-                gesturesJson = gesturesJson
+                gamingModePreferred = eq.activePreset == EqPresetId.GAMING_AUDIO,
+                gesturesJson = "[]"
             )
         )
     }
 
     suspend fun applyProfile(profile: DeviceProfileEntity) {
         val preset = EqPresetId.entries.firstOrNull { it.name == profile.eqPresetName } ?: EqPresetId.CUSTOM
-        val bands = profile.eqBandsCsv.split(",").mapNotNull { it.toIntOrNull() }.takeIf { it.size == 5 }
-            ?: preset.curveMb
-        audioFxEngine.applyBands(bands)
+        val currentBands = _equalizerState.value.bands
+        val savedBands = profile.eqBandsCsv.split(",").mapNotNull { it.trim().toIntOrNull() }
+        val targetLevels = if (savedBands.size == currentBands.size) {
+            savedBands
+        } else {
+            audioFxEngine.mapPresetToHardwareBands(preset, currentBands)
+        }
+        audioFxEngine.applyBands(targetLevels)
         audioFxEngine.setBassBoostStrength(profile.bassBoostStrength)
+        audioFxEngine.setVocalGainMb(profile.vocalGainMb)
         audioFxEngine.setVirtualizerStrength(profile.virtualizerStrength)
         _equalizerState.update { state ->
             state.copy(
                 activePreset = preset,
                 bands = state.bands.mapIndexed { idx, b ->
-                    b.copy(levelMb = bands.getOrElse(idx) { 0 }.coerceIn(b.minMb, b.maxMb))
+                    b.copy(levelMb = targetLevels.getOrElse(idx) { 0 }.coerceIn(b.minMb, b.maxMb))
                 },
                 bassBoostStrength = profile.bassBoostStrength,
+                vocalGainMb = profile.vocalGainMb,
                 virtualizerStrength = profile.virtualizerStrength
             )
         }
@@ -319,6 +407,7 @@ class SoniqRepository(
                 preset = parsed.activeEqPreset ?: current.activeEqPreset,
                 bandsMb = parsed.eqBandsMb ?: current.eqBandsMb,
                 bassBoostStrength = parsed.bassBoostStrength ?: current.bassBoostStrength,
+                vocalGainMb = parsed.vocalGainMb ?: current.vocalGainMb,
                 virtualizerStrength = parsed.virtualizerStrength ?: current.virtualizerStrength,
                 eqEnabled = parsed.eqEnabled ?: current.eqEnabled
             )
@@ -331,24 +420,20 @@ class SoniqRepository(
     suspend fun runDiagnosticsSuite(): List<DiagnosticCheckResult> {
         val snap = bluetoothController.snapshot.value
         val eq = _equalizerState.value
+        val spatial = _spatialState.value
+        val theatre = homeTheatreManager.state.value
         val results = listOf(
             DiagnosticCheckResult(
                 id = "bt_hw",
                 title = "Bluetooth Hardware Adapter",
                 passed = snap.isBluetoothSupported,
-                detail = if (snap.isBluetoothSupported) "Bluetooth radio present on device" else "No Bluetooth adapter found (emulator or unsupported hardware)"
+                detail = if (snap.isBluetoothSupported) "Bluetooth radio present" else "No Bluetooth adapter found"
             ),
             DiagnosticCheckResult(
                 id = "bt_power",
-                title = "Bluetooth Radio Power",
-                passed = snap.isBluetoothEnabled,
-                detail = if (snap.isBluetoothEnabled) "Radio powered ON" else "Radio is OFF or unavailable"
-            ),
-            DiagnosticCheckResult(
-                id = "bt_perms",
-                title = "Runtime Bluetooth Permissions",
-                passed = snap.permissionState.hasAllRequiredBluetoothPermissions,
-                detail = if (snap.permissionState.hasAllRequiredBluetoothPermissions) "Scan & Connect permissions granted" else "Missing BLUETOOTH_SCAN or BLUETOOTH_CONNECT"
+                title = "Bluetooth Radio & Permissions",
+                passed = snap.isBluetoothEnabled && snap.permissionState.hasAllRequiredBluetoothPermissions,
+                detail = "Enabled=${snap.isBluetoothEnabled}, Scan=${snap.permissionState.hasScanPermission}, Connect=${snap.permissionState.hasConnectPermission}"
             ),
             DiagnosticCheckResult(
                 id = "a2dp_proxy",
@@ -358,9 +443,21 @@ class SoniqRepository(
             ),
             DiagnosticCheckResult(
                 id = "audio_fx",
-                title = "Android AudioFX DSP Engine",
+                title = "Android AudioFX Studio DSP",
                 passed = eq.isEngineAvailable,
-                detail = eq.statusMessage
+                detail = "${eq.statusMessage} (${eq.hardwareBandCount} bands, Bass=${eq.bassBoostAvailable}, Vocal=${eq.vocalEnhancerAvailable})"
+            ),
+            DiagnosticCheckResult(
+                id = "spatializer",
+                title = "Android Spatializer 3D HAL",
+                passed = spatial.isAvailable,
+                detail = spatial.explanation
+            ),
+            DiagnosticCheckResult(
+                id = "home_theatre",
+                title = "Home Theatre Wi-Fi / Output Routes",
+                passed = theatre.isWifiConnected || theatre.activeOutputRoutes.isNotEmpty(),
+                detail = "Wi-Fi=${theatre.isWifiConnected}, Active Outputs=${theatre.activeOutputRoutes.size}"
             )
         )
         val prefs = prefsDataStore.preferencesFlow.first()
@@ -376,6 +473,28 @@ class SoniqRepository(
             }
         }
         return results
+    }
+
+    suspend fun buildCompatibilityReport(): String {
+        val snap = bluetoothController.snapshot.value
+        val eq = _equalizerState.value
+        val spatial = _spatialState.value
+        val theatre = homeTheatreManager.state.value
+        return buildString {
+            appendLine("=== SONIQ Compatibility Report ===")
+            appendLine("App Version: ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})")
+            appendLine("Device: ${Build.MANUFACTURER} ${Build.MODEL} (Android ${Build.VERSION.RELEASE} / API ${Build.VERSION.SDK_INT})")
+            appendLine("Bluetooth Supported: ${snap.isBluetoothSupported}, Enabled: ${snap.isBluetoothEnabled}")
+            appendLine("A2DP Ready: ${snap.a2dpProxyReady}, HFP Ready: ${snap.headsetProxyReady}")
+            appendLine("Active Connected Device: ${snap.activeLiveDevice?.name ?: "None"} (${snap.activeLiveDevice?.brand?.displayName ?: "-"})")
+            appendLine("AudioFX EQ Bands: ${eq.hardwareBandCount} (EngineAvailable=${eq.isEngineAvailable})")
+            appendLine("Spatializer: Available=${spatial.isAvailable}, Enabled=${spatial.isEnabled}, HeadTracker=${spatial.isHeadTrackerAvailable}")
+            appendLine("Home Theatre Routes: ${theatre.activeOutputRoutes.joinToString { "${it.productName} [${it.typeLabel}]" }}")
+            appendLine("\nOEM Integrations:")
+            OemIntegrationRegistry.allIntegrations.forEach { oem ->
+                appendLine("- ${oem.info.displayName}: ${oem.info.sdkStatus}")
+            }
+        }
     }
 
     suspend fun clearDiagnosticLogs() = dao.clearDiagnosticLogs()

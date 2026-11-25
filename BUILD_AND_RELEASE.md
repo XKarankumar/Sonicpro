@@ -1,13 +1,16 @@
-# SONIQ PRO — Build & Release Guide
+# SONIQ — Build & Release Guide
 
 ## Architecture Overview
-- **Domain (`com.example.domain`)**: Hardware-agnostic earbud telemetry models and modular `EarbudsProtocolAdapter` registry (`StandardBluetoothAdapter`, `OnePlusOppoProtocolAdapter`, `FastPairProtocolAdapter`, and explicit opt-in `DemoPreviewFactory`).
+- **Domain (`com.example.domain`)**:
+  - `EarbudModels.kt`: Hardware telemetry, dynamic EQ bands, Android `Spatializer` capability state, and Home Theatre route/mDNS endpoint models.
+  - `OemIntegration.kt`: 8 modular `OemDeviceIntegration` adapters (`OnePlusIntegration`, `SamsungIntegration`, `SonyIntegration`, `JBLIntegration`, `BoseIntegration`, `NothingIntegration`, `HomeTheatreIntegration`, `GenericBluetoothIntegration`) covering 15 manufacturers with strict `UNAVAILABLE` labeling for proprietary SDK features.
 - **Data (`com.example.data`)**:
-  - `AndroidBluetoothController`: Real BLE `BluetoothLeScanner`, Classic discovery, A2DP/HFP profile proxies, BLE GATT Battery (`0x180F`) and Device Info (`0x180A`), and A2DP codec status.
-  - `AudioFxDspEngine`: Real `android.media.audiofx.Equalizer`, `BassBoost`, and `Virtualizer` DSP controls.
+  - `AndroidBluetoothController`: BLE `BluetoothLeScanner`, Classic discovery, A2DP/HFP profile proxies, BLE GATT Battery (`0x180F`) and Device Information (`0x180A`), and A2DP codec telemetry.
+  - `AudioFxDspEngine`: Real Android `Equalizer` (up to 10 hardware bands), `BassBoost`, `LoudnessEnhancer`, `Virtualizer`, and Android 13+ (`API 33+`) `Spatializer` inspector.
+  - `HomeTheatreManager`: Android `NsdManager` mDNS LAN discovery (`_googlecast._tcp.`, `_airplay._tcp.`, `_sonos._tcp.`, `_spotify-connect._tcp.`, `_http._tcp.`), `AudioDeviceInfo` route inspection, stream volume, and `KeyEvent` media transport.
   - `FindEarbudsEngine`: Stereo / Left / Right `AudioTrack` locator chime + optional coarse last-known location.
-  - `SoniqDatabase` (Room) & `UserPreferencesDataStore` & `SettingsBackupManager` (versioned JSON export/import).
-- **UI (`com.example.ui`)**: Jetpack Compose Material 3 OnePlus-inspired Obsidian Black & Crimson theme, adaptive `NavigationBar` / `NavigationRail`, and four main screens (`Studio`, `Sound`, `Devices`, `System`).
+  - `SoniqDatabase` (Room), `UserPreferencesDataStore`, and `SettingsBackupManager` (versioned JSON export/import).
+- **UI (`com.example.ui`)**: Jetpack Compose Material 3 AMOLED Black & Crimson theme, adaptive 5-tab `NavigationBar` / `NavigationRail` (`Home`, `Devices`, `Studio`, `Theatre`, `Settings`).
 
 ## Local Build & Test Commands
 Run unit & Robolectric tests:
@@ -29,14 +32,5 @@ gradle :app:assembleRelease :app:bundleRelease
 ```
 
 ## GitHub Actions CI & Signed Release Setup
-1. Every push automatically runs unit/Robolectric tests and builds a downloadable Debug APK (`soniq-pro-debug-apk` under **Actions → Artifacts**) using JDK 21, Gradle 9.3.1, Android SDK 36, and `debug.keystore.base64`.
-2. To also generate signed release APKs and AABs (`soniq-pro-signed-release`):
-   - Generate an upload keystore (alias `upload` to match `app/build.gradle.kts`):
-     ```bash
-     keytool -genkey -v -keystore my-upload-key.jks -keyalg RSA -keysize 2048 -validity 10000 -alias upload
-     ```
-   - Base64-encode the keystore and add the following GitHub Repository Secrets:
-     - `KEYSTORE_BASE64`: `base64 -w 0 my-upload-key.jks`
-     - `STORE_PASSWORD`: Keystore password
-     - `KEY_PASSWORD`: Key password
-3. Push to GitHub or trigger **SONIQ PRO Android CI & APK Build** manually via **workflow_dispatch**.
+1. Every push runs `:app:testDebugUnitTest` and builds a downloadable Debug APK (`soniq-debug-apk` under **Actions → Artifacts**) using JDK 21, Gradle 9.3.1, Android SDK 36, and `debug.keystore.base64`.
+2. To generate signed release APKs and AABs (`soniq-signed-release`), set GitHub Repository Secrets `KEYSTORE_BASE64`, `STORE_PASSWORD`, and `KEY_PASSWORD` matching keystore alias `upload`.

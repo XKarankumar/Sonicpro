@@ -1,6 +1,6 @@
 {
-  "name": "SONIQ PRO",
-  "description": "Production OnePlus Buds Pro 3 companion app with genuine Android Bluetooth Classic/BLE/GATT integration, AudioFX DSP equalizer, Spatializer inspection, Find My Earbuds, and honest protocol capability reporting.",
+  "name": "SONIQ",
+  "description": "Universal Android Audio Intelligence Platform with modular OEM Bluetooth/BLE/GATT integrations, AudioFX & LoudnessEnhancer studio DSP, Android Spatializer 3D sound inspection, mDNS Home Theatre discovery, and zero-fabrication hardware telemetry.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

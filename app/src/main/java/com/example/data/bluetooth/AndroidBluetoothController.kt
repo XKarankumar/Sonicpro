@@ -24,12 +24,15 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.ParcelUuid
 import androidx.core.content.ContextCompat
+import com.example.domain.integration.IntegrationScanContext
+import com.example.domain.integration.IntegrationTelemetryContext
+import com.example.domain.integration.OemIntegrationRegistry
 import com.example.domain.model.AudioCodecInfo
+import com.example.domain.model.AudioDeviceCategory
 import com.example.domain.model.BatteryTelemetry
 import com.example.domain.model.BluetoothConnectionState
-import com.example.domain.model.DataSourceMode
 import com.example.domain.model.EarbudsDevice
-import com.example.domain.protocol.DeviceProtocolRegistry
+import com.example.domain.model.SpatialAudioCapabilityState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -64,7 +67,7 @@ data class BluetoothHardwareSnapshot(
 )
 
 /**
- * Lifecycle-aware real Android Bluetooth Classic + BLE + GATT controller.
+ * Lifecycle-aware Android Bluetooth Classic + BLE + GATT controller.
  * Reads genuine bonded devices, BLE scan advertisements, GATT Battery (0x180F),
  * GATT Device Information (0x180A), A2DP codec status, and Android battery intents.
  */
@@ -73,12 +76,14 @@ class AndroidBluetoothController(
     private val context: Context,
     private val scope: CoroutineScope,
     private val onConnectionLifecycleEvent: (address: String, name: String, event: String, detail: String) -> Unit,
-    private val onBatteryObserved: (address: String, name: String, battery: BatteryTelemetry) -> Unit
+    private val onBatteryObserved: (address: String, name: String, battery: BatteryTelemetry) -> Unit,
+    private val onErrorLogged: (category: String, message: String) -> Unit
 ) {
     companion object {
         private val UUID_BATTERY_SERVICE: UUID = UUID.fromString("0000180f-0000-1000-8000-00805f9b34fb")
         private val UUID_BATTERY_LEVEL: UUID = UUID.fromString("00002a19-0000-1000-8000-00805f9b34fb")
         private val UUID_DEVICE_INFO_SERVICE: UUID = UUID.fromString("0000180a-0000-1000-8000-00805f9b34fb")
+        private val UUID_MODEL_NUMBER: UUID = UUID.fromString("00002a24-0000-1000-8000-00805f9b34fb")
         private val UUID_FIRMWARE_REV: UUID = UUID.fromString("00002a26-0000-1000-8000-00805f9b34fb")
         private val UUID_HARDWARE_REV: UUID = UUID.fromString("00002a27-0000-1000-8000-00805f9b34fb")
         private val UUID_MANUFACTURER_NAME: UUID = UUID.fromString("00002a29-0000-1000-8000-00805f9b34fb")
@@ -101,6 +106,7 @@ class AndroidBluetoothController(
 
     private data class GattDeviceSnapshot(
         val batteryPercent: Int? = null,
+        val modelNumber: String? = null,
         val firmwareVersion: String? = null,
         val hardwareRevision: String? = null,
         val manufacturerName: String? = null,
@@ -110,7 +116,8 @@ class AndroidBluetoothController(
 
     private var systemEqAvailable = false
     private var systemBassAvailable = false
-    private var systemVirtAvailable = false
+    private var systemVocalAvailable = false
+    private var spatialState = SpatialAudioCapabilityState()
 
     private val _snapshot = MutableStateFlow(
         BluetoothHardwareSnapshot(
@@ -173,8 +180,7 @@ class AndroidBluetoothController(
                         BluetoothDevice.BOND_BONDING -> "BONDING"
                         else -> "UNBONDED"
                     }
-                    val name = safeDeviceName(device)
-                    onConnectionLifecycleEvent(device.address, name, label, "Bond state updated to $label")
+                    onConnectionLifecycleEvent(device.address, safeDeviceName(device), label, "Bond state: $label")
                     refreshBondedAndConnected()
                 }
                 BluetoothA2dp.ACTION_CONNECTION_STATE_CHANGED,
@@ -183,13 +189,17 @@ class AndroidBluetoothController(
                 BluetoothDevice.ACTION_ACL_DISCONNECTED -> {
                     val device = extractDevice(intent)
                     if (device != null) {
-                        val name = safeDeviceName(device)
                         val eventType = if (action == BluetoothDevice.ACTION_ACL_DISCONNECTED) {
                             "DISCONNECTED"
                         } else {
                             "CONNECTION_UPDATE"
                         }
-                        onConnectionLifecycleEvent(device.address, name, eventType, "System profile update: ${action.substringAfterLast('.')}")
+                        onConnectionLifecycleEvent(
+                            device.address,
+                            safeDeviceName(device),
+                            eventType,
+                            "Profile event: ${action.substringAfterLast('.')}"
+                        )
                     }
                     refreshBondedAndConnected()
                 }
@@ -197,13 +207,15 @@ class AndroidBluetoothController(
                     val device = extractDevice(intent) ?: return
                     val level = intent.getIntExtra(EXTRA_BATTERY_LEVEL, -1)
                     if (level in 0..100) {
-                        val name = safeDeviceName(device)
-                        val telemetry = BatteryTelemetry(
-                            singlePercent = level,
-                            sourceLabel = "Android Bluetooth Battery API",
-                            lastUpdatedMs = System.currentTimeMillis()
+                        onBatteryObserved(
+                            device.address,
+                            safeDeviceName(device),
+                            BatteryTelemetry(
+                                singlePercent = level,
+                                sourceLabel = "Android Bluetooth Battery API",
+                                lastUpdatedMs = System.currentTimeMillis()
+                            )
                         )
-                        onBatteryObserved(device.address, name, telemetry)
                     }
                     refreshBondedAndConnected()
                 }
@@ -221,11 +233,11 @@ class AndroidBluetoothController(
                     mfgIds.add(sparse.keyAt(i))
                 }
             }
-            val uuids = record?.serviceUuids.orEmpty()
-            upsertDiscoveredDevice(device, result.rssi, mfgIds, uuids)
+            upsertDiscoveredDevice(device, result.rssi, mfgIds, record?.serviceUuids.orEmpty())
         }
 
         override fun onScanFailed(errorCode: Int) {
+            onErrorLogged("ble_scan", "BLE scan failed with code $errorCode")
             _snapshot.update {
                 it.copy(
                     isScanning = false,
@@ -238,7 +250,9 @@ class AndroidBluetoothController(
     private val gattCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
             if (newState == BluetoothProfile.STATE_CONNECTED && status == BluetoothGatt.GATT_SUCCESS) {
-                runCatching { gatt.discoverServices() }
+                runCatching { gatt.discoverServices() }.onFailure {
+                    onErrorLogged("gatt_discover", it.message ?: "discoverServices failed")
+                }
             } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
                 runCatching { gatt.close() }
                 if (activeGatt == gatt) activeGatt = null
@@ -259,6 +273,7 @@ class AndroidBluetoothController(
 
             gattQueue.clear()
             batteryService?.getCharacteristic(UUID_BATTERY_LEVEL)?.let { gattQueue.addLast(it) }
+            infoService?.getCharacteristic(UUID_MODEL_NUMBER)?.let { gattQueue.addLast(it) }
             infoService?.getCharacteristic(UUID_FIRMWARE_REV)?.let { gattQueue.addLast(it) }
             infoService?.getCharacteristic(UUID_HARDWARE_REV)?.let { gattQueue.addLast(it) }
             infoService?.getCharacteristic(UUID_MANUFACTURER_NAME)?.let { gattQueue.addLast(it) }
@@ -294,10 +309,16 @@ class AndroidBluetoothController(
         }
     }
 
-    fun updateAudioFxAvailability(eqAvailable: Boolean, bassAvailable: Boolean, virtAvailable: Boolean) {
+    fun updateAudioCapabilities(
+        eqAvailable: Boolean,
+        bassAvailable: Boolean,
+        vocalAvailable: Boolean,
+        spatial: SpatialAudioCapabilityState
+    ) {
         systemEqAvailable = eqAvailable
         systemBassAvailable = bassAvailable
-        systemVirtAvailable = virtAvailable
+        systemVocalAvailable = vocalAvailable
+        spatialState = spatial
         refreshBondedAndConnected()
     }
 
@@ -309,6 +330,8 @@ class AndroidBluetoothController(
             runCatching {
                 adapter.getProfileProxy(context, profileListener, BluetoothProfile.A2DP)
                 adapter.getProfileProxy(context, profileListener, BluetoothProfile.HEADSET)
+            }.onFailure {
+                onErrorLogged("profile_proxy", it.message ?: "Failed to bind Bluetooth profile proxy")
             }
         }
         refreshBondedAndConnected()
@@ -412,7 +435,7 @@ class AndroidBluetoothController(
         }
         val adapter = bluetoothAdapter
         if (adapter == null || !adapter.isEnabled) {
-            _snapshot.update { it.copy(lastStatusMessage = "Turn on Bluetooth to scan for earbuds") }
+            _snapshot.update { it.copy(lastStatusMessage = "Turn on Bluetooth to scan") }
             return
         }
 
@@ -428,7 +451,7 @@ class AndroidBluetoothController(
         val scanner: BluetoothLeScanner? = runCatching { adapter.bluetoothLeScanner }.getOrNull()
         if (scanner != null) {
             val settings = ScanSettings.Builder()
-                .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+                .setScanMode(ScanSettings.SCAN_MODE_BALANCED)
                 .build()
             runCatching { scanner.startScan(null, settings, leScanCallback) }
         }
@@ -437,7 +460,7 @@ class AndroidBluetoothController(
         }
 
         scanTimeoutJob = scope.launch {
-            delay(12_000L)
+            delay(10_000L)
             stopScan()
         }
     }
@@ -453,7 +476,7 @@ class AndroidBluetoothController(
         _snapshot.update {
             it.copy(
                 isScanning = false,
-                lastStatusMessage = if (it.discoveredDevices.isEmpty()) "Scan finished" else "Found ${it.discoveredDevices.size} nearby device(s)"
+                lastStatusMessage = if (it.discoveredDevices.isEmpty()) "Scan complete" else "Found ${it.discoveredDevices.size} nearby device(s)"
             )
         }
     }
@@ -556,6 +579,10 @@ class AndroidBluetoothController(
                 }
                 prev.copy(batteryPercent = pct ?: prev.batteryPercent, hasBatteryService = true)
             }
+            UUID_MODEL_NUMBER -> prev.copy(
+                modelNumber = value.toString(Charsets.UTF_8).trim('\u0000', ' '),
+                hasDeviceInfoService = true
+            )
             UUID_FIRMWARE_REV -> prev.copy(
                 firmwareVersion = value.toString(Charsets.UTF_8).trim('\u0000', ' '),
                 hasDeviceInfoService = true
@@ -590,11 +617,7 @@ class AndroidBluetoothController(
         _snapshot.update { state ->
             val current = state.discoveredDevices.toMutableList()
             val idx = current.indexOfFirst { it.address == mapped.address }
-            if (idx >= 0) {
-                current[idx] = mapped
-            } else {
-                current.add(mapped)
-            }
+            if (idx >= 0) current[idx] = mapped else current.add(mapped)
             state.copy(
                 discoveredDevices = current.sortedWith(
                     compareByDescending<EarbudsDevice> { it.isAudioDevice }
@@ -618,35 +641,55 @@ class AndroidBluetoothController(
         val batterySource = when {
             gattMeta?.batteryPercent != null -> "BLE GATT Battery (0x180F)"
             systemBattery != null -> "Android HFP/Battery API"
-            else -> "Not reported by device"
+            else -> "UNAVAILABLE (not reported by device)"
         }
 
         val codec = if (isConnected) readA2dpCodecInfo(device) else null
-        val adapter = DeviceProtocolRegistry.resolveAdapter(name, manufacturerIds, serviceUuids)
-        val brand = DeviceProtocolRegistry.inferBrand(name, manufacturerIds, serviceUuids)
-        val isAudio = runCatching {
-            device.bluetoothClass?.majorDeviceClass == BluetoothClass.Device.Major.AUDIO_VIDEO ||
-                name.lowercase().let { n ->
-                    n.contains("bud") || n.contains("pod") || n.contains("ear") ||
-                        n.contains("audio") || n.contains("head") || n.contains("sony") ||
-                        n.contains("enco") || n.contains("oneplus")
-                }
-        }.getOrDefault(false)
+        val majorClass = runCatching { device.bluetoothClass?.majorDeviceClass }.getOrNull()
+        val devClass = runCatching { device.bluetoothClass?.deviceClass }.getOrNull()
 
-        val capabilities = adapter.resolveCapabilities(
-            hasGattBatteryService = gattMeta?.hasBatteryService == true,
-            hasDeviceInfoService = gattMeta?.hasDeviceInfoService == true,
-            hasSingleBatteryLevel = systemBattery != null,
-            hasCodecInfo = codec != null,
-            systemEqAvailable = systemEqAvailable,
-            systemBassAvailable = systemBassAvailable,
-            systemVirtualizerAvailable = systemVirtAvailable
+        val scanCtx = IntegrationScanContext(
+            deviceName = name,
+            manufacturerIds = manufacturerIds,
+            serviceUuidStrings = serviceUuids.map { it.uuid.toString() },
+            bluetoothMajorClass = majorClass,
+            bluetoothDeviceClass = devClass
+        )
+        val integration = OemIntegrationRegistry.resolve(name, manufacturerIds, serviceUuids)
+        val brand = integration.inferBrand(scanCtx)
+        val category = when {
+            devClass == BluetoothClass.Device.AUDIO_VIDEO_LOUDSPEAKER ||
+                devClass == BluetoothClass.Device.AUDIO_VIDEO_HIFI_AUDIO -> AudioDeviceCategory.SPEAKER
+            else -> integration.inferCategory(scanCtx)
+        }
+
+        val isAudio = majorClass == BluetoothClass.Device.Major.AUDIO_VIDEO ||
+            name.lowercase().let { n ->
+                n.contains("bud") || n.contains("pod") || n.contains("ear") ||
+                    n.contains("audio") || n.contains("head") || n.contains("sony") ||
+                    n.contains("jbl") || n.contains("bose") || n.contains("soundbar") ||
+                    n.contains("speaker") || n.contains("enco") || n.contains("oneplus") ||
+                    n.contains("airdopes") || n.contains("noise") || n.contains("sennheiser")
+            }
+
+        val capabilities = integration.detectCapabilities(
+            IntegrationTelemetryContext(
+                hasGattBatteryService = gattMeta?.hasBatteryService == true,
+                hasDeviceInfoService = gattMeta?.hasDeviceInfoService == true,
+                hasSingleBatteryLevel = systemBattery != null,
+                hasCodecInfo = codec != null,
+                systemEqAvailable = systemEqAvailable,
+                systemBassAvailable = systemBassAvailable,
+                systemVocalAvailable = systemVocalAvailable,
+                spatialState = spatialState
+            )
         )
 
         return EarbudsDevice(
             address = device.address,
             name = name,
             brand = brand,
+            category = category,
             rssiDbm = rssiDbm,
             isBonded = runCatching { device.bondState == BluetoothDevice.BOND_BONDED }.getOrDefault(false),
             isAudioDevice = isAudio,
@@ -660,8 +703,8 @@ class AndroidBluetoothController(
             firmwareVersion = gattMeta?.firmwareVersion,
             hardwareRevision = gattMeta?.hardwareRevision,
             manufacturerName = gattMeta?.manufacturerName,
-            capabilities = capabilities,
-            dataSourceMode = DataSourceMode.LIVE_HARDWARE
+            modelNumber = gattMeta?.modelNumber,
+            capabilities = capabilities
         )
     }
 
@@ -693,7 +736,7 @@ class AndroidBluetoothController(
                 3 -> "aptX HD"
                 4 -> "LDAC"
                 5 -> "LC3"
-                else -> "Bluetooth Audio ($type)"
+                else -> "BT Audio ($type)"
             }
             val sampleRateHz = when {
                 (sampleRateCode and 0x01) != 0 -> 44100

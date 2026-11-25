@@ -14,6 +14,7 @@ data class RestoredBackupResult(
     val activeEqPreset: EqPresetId?,
     val eqBandsMb: List<Int>?,
     val bassBoostStrength: Int?,
+    val vocalGainMb: Int?,
     val virtualizerStrength: Int?,
     val eqEnabled: Boolean?,
     val notificationSettings: NotificationSettings?,
@@ -30,6 +31,7 @@ data class SoniqBackupPayload(
     val activeEqPreset: String? = null,
     val eqBandsCsv: String? = null,
     val bassBoostStrength: Int? = null,
+    val vocalGainMb: Int? = null,
     val virtualizerStrength: Int? = null,
     val eqEnabled: Boolean? = null,
     val hiddenWidgets: List<String> = emptyList(),
@@ -49,14 +51,15 @@ data class BackupNotificationPayload(
 @JsonClass(generateAdapter = true)
 data class BackupProfilePayload(
     val profileName: String = "Restored Profile",
-    val deviceName: String = "Bluetooth Earbuds",
+    val deviceName: String = "Bluetooth Audio Device",
     val deviceAddress: String = "",
     val eqPresetName: String = EqPresetId.STUDIO_REFERENCE.name,
     val eqBandsCsv: String = "0,0,0,0,0",
     val bassBoostStrength: Int = 0,
+    val vocalGainMb: Int? = null,
     val virtualizerStrength: Int = 0,
     val gamingModePreferred: Boolean = false,
-    val gesturesJson: String = "{}"
+    val gesturesJson: String = "[]"
 )
 
 /**
@@ -84,6 +87,7 @@ class SettingsBackupManager {
             activeEqPreset = prefs.activeEqPreset.name,
             eqBandsCsv = prefs.eqBandsMb.joinToString(","),
             bassBoostStrength = prefs.bassBoostStrength,
+            vocalGainMb = prefs.vocalGainMb,
             virtualizerStrength = prefs.virtualizerStrength,
             eqEnabled = prefs.eqEnabled,
             hiddenWidgets = prefs.hiddenDashboardWidgets.map { it.name },
@@ -102,6 +106,7 @@ class SettingsBackupManager {
                     eqPresetName = p.eqPresetName,
                     eqBandsCsv = p.eqBandsCsv,
                     bassBoostStrength = p.bassBoostStrength,
+                    vocalGainMb = p.vocalGainMb,
                     virtualizerStrength = p.virtualizerStrength,
                     gamingModePreferred = p.gamingModePreferred,
                     gesturesJson = p.gesturesJson
@@ -126,7 +131,7 @@ class SettingsBackupManager {
         val bands = payload.eqBandsCsv
             ?.split(",")
             ?.mapNotNull { it.trim().toIntOrNull() }
-            ?.takeIf { it.size == 5 }
+            ?.takeIf { it.size in 1..10 }
 
         val hidden = payload.hiddenWidgets.mapNotNull { name ->
             DashboardWidgetId.entries.firstOrNull { it.name == name }
@@ -150,6 +155,7 @@ class SettingsBackupManager {
                 eqPresetName = item.eqPresetName,
                 eqBandsCsv = item.eqBandsCsv,
                 bassBoostStrength = item.bassBoostStrength,
+                vocalGainMb = item.vocalGainMb ?: 0,
                 virtualizerStrength = item.virtualizerStrength,
                 gamingModePreferred = item.gamingModePreferred,
                 gesturesJson = item.gesturesJson
@@ -161,6 +167,7 @@ class SettingsBackupManager {
             activeEqPreset = preset,
             eqBandsMb = bands,
             bassBoostStrength = payload.bassBoostStrength,
+            vocalGainMb = payload.vocalGainMb,
             virtualizerStrength = payload.virtualizerStrength,
             eqEnabled = payload.eqEnabled,
             notificationSettings = notif,

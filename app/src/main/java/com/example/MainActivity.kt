@@ -20,13 +20,15 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Devices
-import androidx.compose.material.icons.outlined.Earbuds
 import androidx.compose.material.icons.outlined.GraphicEq
-import androidx.compose.material.icons.outlined.Tune
+import androidx.compose.material.icons.outlined.Home
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material.icons.outlined.SurroundSound
 import androidx.compose.material.icons.rounded.Devices
-import androidx.compose.material.icons.rounded.Earbuds
 import androidx.compose.material.icons.rounded.GraphicEq
-import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material.icons.rounded.Home
+import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.SurroundSound
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
@@ -51,6 +53,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
@@ -62,34 +66,37 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
-import com.example.ui.screens.DashboardScreen
 import com.example.ui.screens.DevicesScreen
-import com.example.ui.screens.SoundScreen
-import com.example.ui.screens.SystemScreen
+import com.example.ui.screens.HomeScreen
+import com.example.ui.screens.SettingsScreen
+import com.example.ui.screens.StudioScreen
+import com.example.ui.screens.TheatreScreen
 import com.example.ui.theme.SoniqProTheme
 import com.example.ui.viewmodel.SoniqUiEvent
 import com.example.ui.viewmodel.SoniqViewModel
 import kotlinx.coroutines.launch
 
 object SoniqRoutes {
-    const val STUDIO = "studio"
-    const val SOUND = "sound"
+    const val HOME = "home"
     const val DEVICES = "devices"
-    const val SYSTEM = "system"
+    const val STUDIO = "studio"
+    const val THEATRE = "theatre"
+    const val SETTINGS = "settings"
 }
 
 private data class NavTab(
     val route: String,
-    val label: String,
+    val labelResId: Int,
     val selectedIcon: ImageVector,
     val unselectedIcon: ImageVector
 )
 
 private val soniqTabs = listOf(
-    NavTab(SoniqRoutes.STUDIO, "Studio", Icons.Rounded.Earbuds, Icons.Outlined.Earbuds),
-    NavTab(SoniqRoutes.SOUND, "Sound", Icons.Rounded.GraphicEq, Icons.Outlined.GraphicEq),
-    NavTab(SoniqRoutes.DEVICES, "Devices", Icons.Rounded.Devices, Icons.Outlined.Devices),
-    NavTab(SoniqRoutes.SYSTEM, "System", Icons.Rounded.Tune, Icons.Outlined.Tune)
+    NavTab(SoniqRoutes.HOME, R.string.nav_home, Icons.Rounded.Home, Icons.Outlined.Home),
+    NavTab(SoniqRoutes.DEVICES, R.string.nav_devices, Icons.Rounded.Devices, Icons.Outlined.Devices),
+    NavTab(SoniqRoutes.STUDIO, R.string.nav_studio, Icons.Rounded.GraphicEq, Icons.Outlined.GraphicEq),
+    NavTab(SoniqRoutes.THEATRE, R.string.nav_theatre, Icons.Rounded.SurroundSound, Icons.Outlined.SurroundSound),
+    NavTab(SoniqRoutes.SETTINGS, R.string.nav_settings, Icons.Rounded.Settings, Icons.Outlined.Settings)
 )
 
 class MainActivity : ComponentActivity() {
@@ -123,7 +130,7 @@ fun SoniqAppRoot(
     val coroutineScope = rememberCoroutineScope()
     val navController = rememberNavController()
     val backStackEntry by navController.currentBackStackEntryAsState()
-    val currentRoute = backStackEntry?.destination?.route ?: SoniqRoutes.STUDIO
+    val currentRoute = backStackEntry?.destination?.route ?: SoniqRoutes.HOME
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -171,7 +178,7 @@ fun SoniqAppRoot(
                         stream.write(json.toByteArray(Charsets.UTF_8))
                     }
                 }.onSuccess {
-                    snackbarHostState.showSnackbar("SONIQ PRO backup exported")
+                    snackbarHostState.showSnackbar("SONIQ backup exported")
                 }.onFailure { err ->
                     snackbarHostState.showSnackbar("Export failed: ${err.message}")
                 }
@@ -191,6 +198,25 @@ fun SoniqAppRoot(
                     if (raw.isNotBlank()) viewModel.restoreBackupJson(raw)
                 }.onFailure { err ->
                     snackbarHostState.showSnackbar("Could not read backup: ${err.message}")
+                }
+            }
+        }
+    }
+
+    val exportReportLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("text/plain")
+    ) { uri ->
+        if (uri != null) {
+            coroutineScope.launch {
+                runCatching {
+                    val report = viewModel.generateCompatibilityReport()
+                    context.contentResolver.openOutputStream(uri)?.use { stream ->
+                        stream.write(report.toByteArray(Charsets.UTF_8))
+                    }
+                }.onSuccess {
+                    snackbarHostState.showSnackbar("Compatibility report exported")
+                }.onFailure { err ->
+                    snackbarHostState.showSnackbar("Report export failed: ${err.message}")
                 }
             }
         }
@@ -265,6 +291,7 @@ fun SoniqAppRoot(
                         ) {
                             soniqTabs.forEach { tab ->
                                 val selected = currentRoute == tab.route
+                                val label = stringResource(tab.labelResId)
                                 NavigationBarItem(
                                     selected = selected,
                                     onClick = { navigateToTab(tab.route) },
@@ -272,10 +299,16 @@ fun SoniqAppRoot(
                                     icon = {
                                         Icon(
                                             imageVector = if (selected) tab.selectedIcon else tab.unselectedIcon,
-                                            contentDescription = tab.label
+                                            contentDescription = label
                                         )
                                     },
-                                    label = { Text(tab.label) },
+                                    label = {
+                                        Text(
+                                            text = label,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
+                                    },
                                     colors = NavigationBarItemDefaults.colors(
                                         selectedIconColor = MaterialTheme.colorScheme.primary,
                                         selectedTextColor = MaterialTheme.colorScheme.primary,
@@ -298,6 +331,7 @@ fun SoniqAppRoot(
                         ) {
                             soniqTabs.forEach { tab ->
                                 val selected = currentRoute == tab.route
+                                val label = stringResource(tab.labelResId)
                                 NavigationRailItem(
                                     selected = selected,
                                     onClick = { navigateToTab(tab.route) },
@@ -305,10 +339,10 @@ fun SoniqAppRoot(
                                     icon = {
                                         Icon(
                                             imageVector = if (selected) tab.selectedIcon else tab.unselectedIcon,
-                                            contentDescription = tab.label
+                                            contentDescription = label
                                         )
                                     },
-                                    label = { Text(tab.label) },
+                                    label = { Text(label, maxLines = 1) },
                                     colors = NavigationRailItemDefaults.colors(
                                         selectedIconColor = MaterialTheme.colorScheme.primary,
                                         selectedTextColor = MaterialTheme.colorScheme.primary,
@@ -322,36 +356,18 @@ fun SoniqAppRoot(
                     Box(modifier = Modifier.weight(1f)) {
                         NavHost(
                             navController = navController,
-                            startDestination = SoniqRoutes.STUDIO
+                            startDestination = SoniqRoutes.HOME
                         ) {
-                            composable(SoniqRoutes.STUDIO) {
-                                DashboardScreen(
+                            composable(SoniqRoutes.HOME) {
+                                HomeScreen(
                                     state = state,
                                     onRequestBluetoothPermissions = requestBluetoothPermissions,
                                     onNavigateToDevices = { navigateToTab(SoniqRoutes.DEVICES) },
-                                    onNavigateToSound = { navigateToTab(SoniqRoutes.SOUND) },
-                                    onEnableDemoPreview = viewModel::enableDemoPreview,
-                                    onDisableDemoPreview = viewModel::disableDemoPreview,
-                                    onToggleDemoCaseLid = viewModel::toggleDemoCaseLid,
+                                    onNavigateToStudio = { navigateToTab(SoniqRoutes.STUDIO) },
                                     onRefreshLiveTelemetry = viewModel::refreshLiveHardware,
-                                    onSelectAncMode = viewModel::setAncMode,
-                                    onChangeAncIntensity = viewModel::setAncIntensity,
-                                    onToggleGamingMode = viewModel::toggleGamingMode,
-                                    onCycleSpatialAudio = viewModel::setSpatialAudioMode,
-                                    onToggleInEarDetection = viewModel::toggleInEarDetection,
-                                    onSwitchMultipointHost = viewModel::switchMultipointPrimary
-                                )
-                            }
-                            composable(SoniqRoutes.SOUND) {
-                                SoundScreen(
-                                    state = state,
-                                    onToggleEqEnabled = viewModel::toggleEqualizerEnabled,
-                                    onSelectPreset = viewModel::selectEqPreset,
-                                    onUpdateBand = viewModel::updateEqBand,
-                                    onUpdateBassBoost = viewModel::updateBassBoost,
-                                    onSelectSpatialMode = viewModel::setSpatialAudioMode,
-                                    onToggleGamingMode = viewModel::toggleGamingMode,
-                                    onSaveProfile = viewModel::saveCurrentAsProfile
+                                    onConnectDevice = viewModel::connectDevice,
+                                    onDisconnectDevice = viewModel::disconnectDevice,
+                                    onSelectInspectedDevice = viewModel::selectInspectedDevice
                                 )
                             }
                             composable(SoniqRoutes.DEVICES) {
@@ -366,12 +382,7 @@ fun SoniqAppRoot(
                                     onPairDevice = viewModel::pairDevice,
                                     onConnectDevice = viewModel::connectDevice,
                                     onDisconnectDevice = viewModel::disconnectDevice,
-                                    onEnableDemoPreview = viewModel::enableDemoPreview,
-                                    onDisableDemoPreview = viewModel::disableDemoPreview,
-                                    onUpdateGesture = viewModel::updateTouchGesture,
-                                    onToggleDualDevice = viewModel::toggleDualDeviceMultipoint,
-                                    onToggleCallNoiseReduction = viewModel::toggleCallNoiseReduction,
-                                    onToggleMicSidetone = viewModel::toggleMicSidetone,
+                                    onSelectInspectedDevice = viewModel::selectInspectedDevice,
                                     onToggleFindChime = viewModel::toggleFindChime,
                                     onCaptureLastKnownLocation = viewModel::captureLastKnownLocation,
                                     onOpenBluetoothSettings = {
@@ -381,8 +392,41 @@ fun SoniqAppRoot(
                                     }
                                 )
                             }
-                            composable(SoniqRoutes.SYSTEM) {
-                                SystemScreen(
+                            composable(SoniqRoutes.STUDIO) {
+                                StudioScreen(
+                                    state = state,
+                                    onToggleEqEnabled = viewModel::toggleEqualizerEnabled,
+                                    onSelectPreset = viewModel::selectEqPreset,
+                                    onUpdateBand = viewModel::updateEqBand,
+                                    onUpdateBassBoost = viewModel::updateBassBoost,
+                                    onUpdateVocalGain = viewModel::updateVocalGain,
+                                    onUpdateVirtualizer = viewModel::updateVirtualizer,
+                                    onRefreshSpatializer = viewModel::refreshSpatializer,
+                                    onOpenSoundSettings = {
+                                        runCatching {
+                                            context.startActivity(Intent(Settings.ACTION_SOUND_SETTINGS))
+                                        }
+                                    },
+                                    onSaveProfile = viewModel::saveCurrentAsProfile
+                                )
+                            }
+                            composable(SoniqRoutes.THEATRE) {
+                                TheatreScreen(
+                                    state = state,
+                                    onStartNetworkScan = viewModel::startTheatreScan,
+                                    onStopNetworkScan = viewModel::stopTheatreScan,
+                                    onRefreshRoutes = viewModel::refreshTheatreRoutes,
+                                    onSetVolume = viewModel::setTheatreVolume,
+                                    onToggleMute = viewModel::toggleTheatreMute,
+                                    onMediaPlayPause = viewModel::dispatchMediaPlayPause,
+                                    onMediaNext = viewModel::dispatchMediaNext,
+                                    onMediaPrevious = viewModel::dispatchMediaPrevious,
+                                    onConnectBluetoothSpeaker = viewModel::connectDevice,
+                                    onDisconnectBluetoothSpeaker = viewModel::disconnectDevice
+                                )
+                            }
+                            composable(SoniqRoutes.SETTINGS) {
+                                SettingsScreen(
                                     state = state,
                                     onSelectTheme = viewModel::setThemePreference,
                                     onToggleWidgetVisibility = viewModel::toggleDashboardWidgetVisibility,
@@ -392,10 +436,13 @@ fun SoniqAppRoot(
                                     onApplyProfile = viewModel::applyProfile,
                                     onDeleteProfile = viewModel::deleteProfile,
                                     onExportBackup = {
-                                        exportBackupLauncher.launch("soniq_pro_backup.json")
+                                        exportBackupLauncher.launch("soniq_backup.json")
                                     },
                                     onImportBackup = {
                                         importBackupLauncher.launch(arrayOf("application/json", "text/plain"))
+                                    },
+                                    onExportCompatibilityReport = {
+                                        exportReportLauncher.launch("soniq_compatibility_report.txt")
                                     },
                                     onClearHistory = viewModel::clearHistory,
                                     onSetDiagnosticsConsent = viewModel::setDiagnosticsConsent,

@@ -1,5 +1,6 @@
 package com.example.ui.viewmodel
 
+import android.view.KeyEvent
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
@@ -12,23 +13,19 @@ import com.example.data.local.DiagnosticLogEntity
 import com.example.data.local.StoredAppPreferences
 import com.example.data.repository.ReleaseNotesCatalog
 import com.example.data.repository.SoniqRepository
-import com.example.domain.model.AncMode
+import com.example.domain.integration.OemDeviceIntegration
+import com.example.domain.integration.OemIntegrationRegistry
 import com.example.domain.model.AppReleaseNote
-import com.example.domain.model.BluetoothConnectionState
 import com.example.domain.model.DashboardWidgetId
-import com.example.domain.model.DataSourceMode
 import com.example.domain.model.DiagnosticCheckResult
 import com.example.domain.model.EarbudSide
 import com.example.domain.model.EarbudsDevice
 import com.example.domain.model.EqPresetId
 import com.example.domain.model.EqualizerState
-import com.example.domain.model.GestureMapping
 import com.example.domain.model.NotificationSettings
-import com.example.domain.model.SpatialAudioMode
+import com.example.domain.model.SpatialAudioCapabilityState
+import com.example.domain.model.TheatreEcosystemState
 import com.example.domain.model.ThemePreference
-import com.example.domain.model.TouchAction
-import com.example.domain.model.TouchTrigger
-import com.example.domain.protocol.DemoPreviewFactory
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -37,14 +34,11 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import org.json.JSONArray
-import org.json.JSONObject
 
 data class SoniqUiState(
     val activeDevice: EarbudsDevice? = null,
-    val isDemoPreviewActive: Boolean = false,
+    val inspectedDevice: EarbudsDevice? = null,
     val bluetoothSnapshot: BluetoothHardwareSnapshot = BluetoothHardwareSnapshot(
         permissionState = BluetoothPermissionState(
             hasScanPermission = false,
@@ -54,8 +48,10 @@ data class SoniqUiState(
         )
     ),
     val equalizerState: EqualizerState = EqualizerState(),
+    val spatialState: SpatialAudioCapabilityState = SpatialAudioCapabilityState(),
+    val theatreState: TheatreEcosystemState = TheatreEcosystemState(),
     val preferences: StoredAppPreferences = StoredAppPreferences(),
-    val gestureMappings: List<GestureMapping> = defaultGestures(),
+    val oemIntegrations: List<OemDeviceIntegration> = OemIntegrationRegistry.allIntegrations,
     val batteryHistory: List<BatteryHistoryEntity> = emptyList(),
     val connectionEvents: List<ConnectionEventEntity> = emptyList(),
     val savedProfiles: List<DeviceProfileEntity> = emptyList(),
@@ -65,20 +61,7 @@ data class SoniqUiState(
     val isFindChimePlaying: Boolean = false,
     val findChimeTarget: EarbudSide? = null,
     val isRunningDiagnostics: Boolean = false
-) {
-    companion object {
-        fun defaultGestures(): List<GestureMapping> = listOf(
-            GestureMapping(EarbudSide.LEFT, TouchTrigger.SINGLE_TAP, TouchAction.PLAY_PAUSE),
-            GestureMapping(EarbudSide.LEFT, TouchTrigger.DOUBLE_TAP, TouchAction.PREVIOUS_TRACK),
-            GestureMapping(EarbudSide.LEFT, TouchTrigger.TRIPLE_TAP, TouchAction.VOICE_ASSISTANT),
-            GestureMapping(EarbudSide.LEFT, TouchTrigger.TOUCH_AND_HOLD, TouchAction.CYCLE_ANC),
-            GestureMapping(EarbudSide.RIGHT, TouchTrigger.SINGLE_TAP, TouchAction.PLAY_PAUSE),
-            GestureMapping(EarbudSide.RIGHT, TouchTrigger.DOUBLE_TAP, TouchAction.NEXT_TRACK),
-            GestureMapping(EarbudSide.RIGHT, TouchTrigger.TRIPLE_TAP, TouchAction.GAMING_MODE),
-            GestureMapping(EarbudSide.RIGHT, TouchTrigger.TOUCH_AND_HOLD, TouchAction.CYCLE_ANC)
-        )
-    }
-}
+)
 
 sealed interface SoniqUiEvent {
     data class ShowMessage(val message: String) : SoniqUiEvent
@@ -87,8 +70,7 @@ sealed interface SoniqUiEvent {
 
 class SoniqViewModel(private val repository: SoniqRepository) : ViewModel() {
 
-    private val demoDeviceState = MutableStateFlow<EarbudsDevice?>(null)
-    private val gestureMappingsState = MutableStateFlow(SoniqUiState.defaultGestures())
+    private val selectedInspectAddress = MutableStateFlow<String?>(null)
     private val diagnosticResultsState = MutableStateFlow<List<DiagnosticCheckResult>>(emptyList())
     private val findState = MutableStateFlow<Pair<Boolean, EarbudSide?>>(false to null)
     private val runningDiagnostics = MutableStateFlow(false)
@@ -97,13 +79,12 @@ class SoniqViewModel(private val repository: SoniqRepository) : ViewModel() {
     val events: SharedFlow<SoniqUiEvent> = _events.asSharedFlow()
 
     private val auxState = combine(
-        demoDeviceState,
-        gestureMappingsState,
+        selectedInspectAddress,
         diagnosticResultsState,
         findState,
         runningDiagnostics
-    ) { demo, gestures, diagResults, find, isRunningDiag ->
-        AuxHolder(demo, gestures, diagResults, find.first, find.second, isRunningDiag)
+    ) { inspectAddr, diagResults, find, isRunningDiag ->
+        AuxHolder(inspectAddr, diagResults, find.first, find.second, isRunningDiag)
     }
 
     private val historyHolder = combine(
@@ -115,21 +96,35 @@ class SoniqViewModel(private val repository: SoniqRepository) : ViewModel() {
         HistoryHolder(bat, conn, prof, logs)
     }
 
+    private val audioEnvHolder = combine(
+        repository.equalizerState,
+        repository.spatialState,
+        repository.theatreState
+    ) { eq, spatial, theatre ->
+        AudioEnvHolder(eq, spatial, theatre)
+    }
+
     val uiState: StateFlow<SoniqUiState> = combine(
         repository.bluetoothSnapshot,
-        repository.equalizerState,
+        audioEnvHolder,
         repository.preferencesFlow,
         auxState,
         historyHolder
-    ) { bt, eq, prefs, aux, hist ->
-        val resolvedActive = aux.demoDevice ?: bt.activeLiveDevice
+    ) { bt, audio, prefs, aux, hist ->
+        val allKnown = bt.bondedAudioDevices + bt.discoveredDevices
+        val inspected = aux.inspectAddress?.let { addr ->
+            allKnown.firstOrNull { it.address == addr }
+        } ?: bt.activeLiveDevice ?: bt.bondedAudioDevices.firstOrNull()
+
         SoniqUiState(
-            activeDevice = resolvedActive,
-            isDemoPreviewActive = aux.demoDevice != null,
+            activeDevice = bt.activeLiveDevice,
+            inspectedDevice = inspected,
             bluetoothSnapshot = bt,
-            equalizerState = eq,
+            equalizerState = audio.eq,
+            spatialState = audio.spatial,
+            theatreState = audio.theatre,
             preferences = prefs,
-            gestureMappings = aux.gestures,
+            oemIntegrations = OemIntegrationRegistry.allIntegrations,
             batteryHistory = hist.batteryHistory,
             connectionEvents = hist.connectionEvents,
             savedProfiles = hist.profiles,
@@ -146,9 +141,14 @@ class SoniqViewModel(private val repository: SoniqRepository) : ViewModel() {
         initialValue = SoniqUiState()
     )
 
+    private data class AudioEnvHolder(
+        val eq: EqualizerState,
+        val spatial: SpatialAudioCapabilityState,
+        val theatre: TheatreEcosystemState
+    )
+
     private data class AuxHolder(
-        val demoDevice: EarbudsDevice?,
-        val gestures: List<GestureMapping>,
+        val inspectAddress: String?,
         val diagResults: List<DiagnosticCheckResult>,
         val isFindPlaying: Boolean,
         val findSide: EarbudSide?,
@@ -166,6 +166,11 @@ class SoniqViewModel(private val repository: SoniqRepository) : ViewModel() {
         repository.bluetoothController.refreshPermissionState()
     }
 
+    fun selectInspectedDevice(address: String) {
+        repository.triggerHaptic()
+        selectedInspectAddress.value = address
+    }
+
     fun startScan() {
         repository.triggerHaptic()
         repository.bluetoothController.startScan()
@@ -178,6 +183,8 @@ class SoniqViewModel(private val repository: SoniqRepository) : ViewModel() {
     fun refreshLiveHardware() {
         repository.triggerHaptic()
         repository.bluetoothController.refreshLiveTelemetryNow()
+        repository.refreshSpatializer()
+        repository.refreshTheatreRoutes()
     }
 
     fun pairDevice(address: String) {
@@ -185,7 +192,7 @@ class SoniqViewModel(private val repository: SoniqRepository) : ViewModel() {
         val ok = repository.bluetoothController.pairDevice(address)
         viewModelScope.launch {
             if (ok) {
-                _events.emit(SoniqUiEvent.ShowMessage("Pairing request initiated"))
+                _events.emit(SoniqUiEvent.ShowMessage("Bluetooth pairing requested"))
             } else {
                 _events.emit(SoniqUiEvent.OpenSystemBluetoothSettings)
             }
@@ -194,10 +201,6 @@ class SoniqViewModel(private val repository: SoniqRepository) : ViewModel() {
 
     fun connectDevice(address: String) {
         repository.triggerHaptic()
-        if (address == DemoPreviewFactory.DEMO_ADDRESS) {
-            enableDemoPreview()
-            return
-        }
         val ok = repository.bluetoothController.connectDevice(address)
         viewModelScope.launch {
             if (ok) {
@@ -211,10 +214,6 @@ class SoniqViewModel(private val repository: SoniqRepository) : ViewModel() {
 
     fun disconnectDevice(address: String) {
         repository.triggerHaptic()
-        if (address == DemoPreviewFactory.DEMO_ADDRESS) {
-            disableDemoPreview()
-            return
-        }
         val ok = repository.bluetoothController.disconnectDevice(address)
         viewModelScope.launch {
             if (!ok) {
@@ -223,166 +222,7 @@ class SoniqViewModel(private val repository: SoniqRepository) : ViewModel() {
         }
     }
 
-    fun enableDemoPreview() {
-        repository.triggerHaptic()
-        val eq = repository.equalizerState.value
-        demoDeviceState.value = DemoPreviewFactory.createDemoDevice(
-            systemEqAvailable = eq.isEngineAvailable,
-            systemBassAvailable = eq.bassBoostAvailable,
-            systemVirtualizerAvailable = eq.virtualizerAvailable
-        )
-        viewModelScope.launch {
-            _events.emit(SoniqUiEvent.ShowMessage("Demo Preview activated (Simulated telemetry — not live hardware)"))
-        }
-    }
-
-    fun disableDemoPreview() {
-        repository.triggerHaptic()
-        demoDeviceState.value = null
-        repository.bluetoothController.refreshBondedAndConnected()
-    }
-
-    fun toggleDemoCaseLid() {
-        val current = demoDeviceState.value ?: return
-        repository.triggerHaptic()
-        demoDeviceState.value = current.copy(isCaseOpen = !current.isCaseOpen)
-    }
-
-    fun setAncMode(mode: AncMode) {
-        val active = uiState.value.activeDevice ?: return
-        if (!active.capabilities.supportsAncControl) {
-            emitUnsupported("Active Noise Cancellation")
-            return
-        }
-        repository.triggerHaptic()
-        if (active.dataSourceMode == DataSourceMode.DEMO_PREVIEW) {
-            demoDeviceState.update { it?.copy(ancMode = mode) }
-        }
-    }
-
-    fun setAncIntensity(intensity: Float) {
-        val active = uiState.value.activeDevice ?: return
-        if (!active.capabilities.supportsAmbientIntensity) return
-        if (active.dataSourceMode == DataSourceMode.DEMO_PREVIEW) {
-            demoDeviceState.update { it?.copy(ancIntensity = intensity.coerceIn(0.1f, 1f)) }
-        }
-    }
-
-    fun toggleGamingMode() {
-        val active = uiState.value.activeDevice ?: return
-        if (!active.capabilities.supportsLowLatencyGamingMode) {
-            emitUnsupported("Hardware Low-Latency Gaming Mode")
-            return
-        }
-        repository.triggerHaptic()
-        if (active.dataSourceMode == DataSourceMode.DEMO_PREVIEW) {
-            demoDeviceState.update { it?.copy(gamingModeEnabled = !it.gamingModeEnabled) }
-        }
-    }
-
-    fun setSpatialAudioMode(mode: SpatialAudioMode) {
-        val active = uiState.value.activeDevice
-        val eq = uiState.value.equalizerState
-        if (active?.dataSourceMode == DataSourceMode.DEMO_PREVIEW) {
-            repository.triggerHaptic()
-            demoDeviceState.update { it?.copy(spatialAudioMode = mode) }
-            val virtStrength = when (mode) {
-                SpatialAudioMode.OFF -> 0
-                SpatialAudioMode.FIXED_STAGE -> 600
-                SpatialAudioMode.HEAD_TRACKING -> 900
-            }
-            viewModelScope.launch { repository.setVirtualizerStrength(virtStrength) }
-            return
-        }
-        if (eq.virtualizerAvailable) {
-            repository.triggerHaptic()
-            val strength = if (mode == SpatialAudioMode.OFF) 0 else 650
-            viewModelScope.launch { repository.setVirtualizerStrength(strength) }
-        } else {
-            emitUnsupported("Spatial Audio / Virtualizer")
-        }
-    }
-
-    fun toggleInEarDetection() {
-        val active = uiState.value.activeDevice ?: return
-        if (!active.capabilities.supportsInEarDetection) {
-            emitUnsupported("In-Ear Detection & Auto Play/Pause")
-            return
-        }
-        repository.triggerHaptic()
-        if (active.dataSourceMode == DataSourceMode.DEMO_PREVIEW) {
-            demoDeviceState.update {
-                it?.copy(
-                    inEarDetectionEnabled = !it.inEarDetectionEnabled,
-                    autoPlayPauseEnabled = !it.inEarDetectionEnabled
-                )
-            }
-        }
-    }
-
-    fun toggleDualDeviceMultipoint() {
-        val active = uiState.value.activeDevice ?: return
-        if (!active.capabilities.supportsDualDeviceMultipoint) {
-            emitUnsupported("Dual-Device Multipoint Control")
-            return
-        }
-        repository.triggerHaptic()
-        if (active.dataSourceMode == DataSourceMode.DEMO_PREVIEW) {
-            demoDeviceState.update { it?.copy(dualDeviceEnabled = !it.dualDeviceEnabled) }
-        }
-    }
-
-    fun switchMultipointPrimary(hostName: String) {
-        val active = uiState.value.activeDevice ?: return
-        if (active.dataSourceMode != DataSourceMode.DEMO_PREVIEW) return
-        repository.triggerHaptic()
-        demoDeviceState.update { device ->
-            device?.copy(
-                multipointHosts = device.multipointHosts.map { host ->
-                    host.copy(isActiveAudioSource = host.hostName == hostName)
-                }
-            )
-        }
-    }
-
-    fun toggleCallNoiseReduction() {
-        val active = uiState.value.activeDevice ?: return
-        if (!active.capabilities.supportsCallMicControls) {
-            emitUnsupported("Call Microphone ENC")
-            return
-        }
-        repository.triggerHaptic()
-        if (active.dataSourceMode == DataSourceMode.DEMO_PREVIEW) {
-            demoDeviceState.update { it?.copy(callNoiseReductionEnabled = !it.callNoiseReductionEnabled) }
-        }
-    }
-
-    fun toggleMicSidetone() {
-        val active = uiState.value.activeDevice ?: return
-        if (!active.capabilities.supportsCallMicControls) {
-            emitUnsupported("Microphone Sidetone")
-            return
-        }
-        repository.triggerHaptic()
-        if (active.dataSourceMode == DataSourceMode.DEMO_PREVIEW) {
-            demoDeviceState.update { it?.copy(micSidetoneEnabled = !it.micSidetoneEnabled) }
-        }
-    }
-
-    fun updateTouchGesture(side: EarbudSide, trigger: TouchTrigger, action: TouchAction) {
-        val active = uiState.value.activeDevice
-        if (active != null && !active.capabilities.supportsCustomTouchGestures) {
-            emitUnsupported("Custom Touch Gesture Remapping")
-            return
-        }
-        repository.triggerHaptic()
-        gestureMappingsState.update { list ->
-            list.map { item ->
-                if (item.side == side && item.trigger == trigger) item.copy(action = action) else item
-            }
-        }
-    }
-
+    // Studio AudioFX DSP & Spatializer
     fun toggleEqualizerEnabled(enabled: Boolean) {
         repository.triggerHaptic()
         viewModelScope.launch { repository.setEqualizerEnabled(enabled) }
@@ -401,10 +241,58 @@ class SoniqViewModel(private val repository: SoniqRepository) : ViewModel() {
         viewModelScope.launch { repository.setBassBoostStrength(strength) }
     }
 
+    fun updateVocalGain(gainMb: Int) {
+        viewModelScope.launch { repository.setVocalGainMb(gainMb) }
+    }
+
     fun updateVirtualizer(strength: Int) {
         viewModelScope.launch { repository.setVirtualizerStrength(strength) }
     }
 
+    fun refreshSpatializer() {
+        repository.triggerHaptic()
+        repository.refreshSpatializer()
+    }
+
+    // Home Theatre Ecosystem
+    fun startTheatreScan() {
+        repository.triggerHaptic()
+        repository.startTheatreScan()
+    }
+
+    fun stopTheatreScan() {
+        repository.stopTheatreScan()
+    }
+
+    fun refreshTheatreRoutes() {
+        repository.refreshTheatreRoutes()
+    }
+
+    fun setTheatreVolume(volume: Int) {
+        repository.setTheatreVolume(volume)
+    }
+
+    fun toggleTheatreMute() {
+        repository.triggerHaptic()
+        repository.toggleTheatreMute()
+    }
+
+    fun dispatchMediaPlayPause() {
+        repository.triggerHaptic()
+        repository.dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE)
+    }
+
+    fun dispatchMediaNext() {
+        repository.triggerHaptic()
+        repository.dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_NEXT)
+    }
+
+    fun dispatchMediaPrevious() {
+        repository.triggerHaptic()
+        repository.dispatchMediaKey(KeyEvent.KEYCODE_MEDIA_PREVIOUS)
+    }
+
+    // Find Device & Location
     fun toggleFindChime(side: EarbudSide?) {
         repository.triggerHaptic()
         val (currentlyPlaying, currentSide) = findState.value
@@ -426,7 +314,7 @@ class SoniqViewModel(private val repository: SoniqRepository) : ViewModel() {
 
     fun captureLastKnownLocation() {
         val dev = uiState.value.activeDevice
-        val name = dev?.name ?: "Last Connected Earbuds"
+        val name = dev?.name ?: "Last Connected Audio Device"
         val addr = dev?.address ?: "UNKNOWN"
         viewModelScope.launch {
             val saved = repository.captureLastKnownLocationNow(name, addr)
@@ -438,6 +326,7 @@ class SoniqViewModel(private val repository: SoniqRepository) : ViewModel() {
         }
     }
 
+    // Settings, Profiles, Backup & Diagnostics
     fun setThemePreference(theme: ThemePreference) {
         repository.triggerHaptic()
         viewModelScope.launch { repository.setThemePreference(theme) }
@@ -493,24 +382,12 @@ class SoniqViewModel(private val repository: SoniqRepository) : ViewModel() {
 
     fun saveCurrentAsProfile(profileName: String) {
         repository.triggerHaptic()
-        val state = uiState.value
-        val active = state.activeDevice
-        val gesturesJson = JSONArray().apply {
-            state.gestureMappings.forEach { g ->
-                put(JSONObject().apply {
-                    put("side", g.side.name)
-                    put("trigger", g.trigger.name)
-                    put("action", g.action.name)
-                })
-            }
-        }.toString()
+        val active = uiState.value.activeDevice
         viewModelScope.launch {
             repository.saveProfile(
                 profileName = profileName,
-                deviceName = active?.name ?: "General Earbuds",
-                deviceAddress = active?.address ?: "",
-                gamingModePreferred = active?.gamingModeEnabled == true,
-                gesturesJson = gesturesJson
+                deviceName = active?.name ?: "Universal Audio Profile",
+                deviceAddress = active?.address ?: ""
             )
             _events.emit(SoniqUiEvent.ShowMessage("Saved profile \"$profileName\""))
         }
@@ -520,18 +397,6 @@ class SoniqViewModel(private val repository: SoniqRepository) : ViewModel() {
         repository.triggerHaptic()
         viewModelScope.launch {
             repository.applyProfile(profile)
-            runCatching {
-                val arr = JSONArray(profile.gesturesJson)
-                val parsed = mutableListOf<GestureMapping>()
-                for (i in 0 until arr.length()) {
-                    val obj = arr.getJSONObject(i)
-                    val side = EarbudSide.valueOf(obj.getString("side"))
-                    val trigger = TouchTrigger.valueOf(obj.getString("trigger"))
-                    val action = TouchAction.valueOf(obj.getString("action"))
-                    parsed.add(GestureMapping(side, trigger, action))
-                }
-                if (parsed.size == 8) gestureMappingsState.value = parsed
-            }
             _events.emit(SoniqUiEvent.ShowMessage("Applied profile \"${profile.profileName}\""))
         }
     }
@@ -549,6 +414,8 @@ class SoniqViewModel(private val repository: SoniqRepository) : ViewModel() {
 
     suspend fun generateBackupJson(): String = repository.exportBackupJson()
 
+    suspend fun generateCompatibilityReport(): String = repository.buildCompatibilityReport()
+
     fun restoreBackupJson(rawJson: String) {
         viewModelScope.launch {
             repository.importBackupJson(rawJson)
@@ -561,10 +428,8 @@ class SoniqViewModel(private val repository: SoniqRepository) : ViewModel() {
         }
     }
 
-    private fun emitUnsupported(featureName: String) {
-        viewModelScope.launch {
-            _events.emit(SoniqUiEvent.ShowMessage("$featureName is not exposed by this device's Bluetooth protocol"))
-        }
+    fun showMessage(message: String) {
+        viewModelScope.launch { _events.emit(SoniqUiEvent.ShowMessage(message)) }
     }
 
     class Factory(private val repository: SoniqRepository) : ViewModelProvider.Factory {

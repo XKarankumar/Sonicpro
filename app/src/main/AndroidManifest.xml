@@ -20,7 +20,12 @@
     <!-- Optional coarse location for Android <= 11 BLE scan and user-enabled Last-Known Location -->
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
-    <!-- Audio DSP & Haptics -->
+    <!-- Local network mDNS discovery (NsdManager) for Home Theatre & smart audio systems -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+
+    <!-- Audio DSP, Volume, Routing & Haptics -->
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.VIBRATE" />
 
@@ -34,9 +39,12 @@
         android:name="android.hardware.bluetooth_le"
         android:required="false" />
 
-    <!-- Least-privilege package visibility check for official OnePlus/HeyMelody companion -->
+    <!-- Least-privilege package visibility for companion verification where installed -->
     <queries>
         <package android:name="com.heymelody.app" />
+        <package android:name="com.samsung.accessory.fridaymgr" />
+        <package android:name="com.sony.songpal.mdr" />
+        <package android:name="com.nothing.smartcenter" />
     </queries>
 
     <application
